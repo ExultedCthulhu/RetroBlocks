@@ -1,0 +1,6 @@
+{
+  "name": "RetroBlocks",
+  "description": "A clean retro RetroBlocks clone featuring a dark theme, pixelated fonts, a local high score leaderboard, procedurally synthesized retro sound effects and background music, and a fully responsive mobile controller.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
