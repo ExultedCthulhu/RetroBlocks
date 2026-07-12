@@ -83,11 +83,9 @@ const getIncrementalMultiplierString = (linesCleared: number): string => {
 const createEmptyBoard = (): Board =>
   Array.from({ length: BOARD_HEIGHT }, () => Array(BOARD_WIDTH).fill(null));
 
-// Helper to get a random Tetromino shape
-const getRandomTetromino = (): Tetromino => {
-  const keys = Object.keys(TETROMINOS) as TetrominoType[];
-  const randomType = keys[Math.floor(Math.random() * keys.length)];
-  const { matrix, color } = TETROMINOS[randomType];
+// Helper to create a Tetromino from a specific type
+const createTetromino = (type: TetrominoType): Tetromino => {
+  const { matrix, color } = TETROMINOS[type];
   
   // Center the tetromino in the board
   const width = matrix[0].length;
@@ -95,10 +93,10 @@ const getRandomTetromino = (): Tetromino => {
   
   return {
     id: Math.random().toString(36).substring(2, 9),
-    type: randomType,
+    type,
     matrix: JSON.parse(JSON.stringify(matrix)),
     color,
-    position: { x: startX, y: randomType === 'I' ? -1 : 0 },
+    position: { x: startX, y: type === 'I' ? -1 : 0 },
   };
 };
 
@@ -240,6 +238,27 @@ export default function RetroBlocksGame() {
   const rotateRef = useRef<() => void>(() => {});
   const togglePauseRef = useRef<() => void>(() => {});
 
+  // 7-bag randomizer state
+  const bagRef = useRef<TetrominoType[]>([]);
+
+  // Function to draw the next piece from the 7-bag randomizer
+  const drawNextPiece = useCallback((): Tetromino => {
+    if (bagRef.current.length === 0) {
+      // Create an array of all 7 unique pieces
+      const pieces: TetrominoType[] = ['I', 'O', 'T', 'S', 'Z', 'J', 'L'];
+      // Shuffle using Fisher-Yates algorithm
+      for (let i = pieces.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        const temp = pieces[i];
+        pieces[i] = pieces[j];
+        pieces[j] = temp;
+      }
+      bagRef.current = pieces;
+    }
+    const nextType = bagRef.current.shift()!;
+    return createTetromino(nextType);
+  }, []);
+
   useEffect(() => {
     moveLeftRef.current = moveLeft;
     moveRightRef.current = moveRight;
@@ -351,8 +370,9 @@ export default function RetroBlocksGame() {
   // Start/restart the game
   const startGame = () => {
     setBoard(createEmptyBoard());
-    const firstPiece = getRandomTetromino();
-    const queue = [getRandomTetromino(), getRandomTetromino(), getRandomTetromino(), getRandomTetromino()];
+    bagRef.current = []; // Reset 7-bag randomizer on game start
+    const firstPiece = drawNextPiece();
+    const queue = [drawNextPiece(), drawNextPiece(), drawNextPiece(), drawNextPiece()];
     setCurrentPiece(firstPiece);
     setNextPieces(queue);
     setHeldPiece(null);
@@ -553,7 +573,7 @@ export default function RetroBlocksGame() {
           ...nextSpawn,
           position: validPos
         });
-        setNextPieces((prev) => [...prev.slice(1), getRandomTetromino()]);
+        setNextPieces((prev) => [...prev.slice(1), drawNextPiece()]);
       }
     } else {
       // Swap with currently held piece
@@ -571,7 +591,7 @@ export default function RetroBlocksGame() {
 
     setHeldPiece(typeToHold);
     triggerLockDelayReset();
-  }, [currentPiece, heldPiece, nextPieces, triggerLockDelayReset, board, checkCollision]);
+  }, [currentPiece, heldPiece, nextPieces, triggerLockDelayReset, board, checkCollision, drawNextPiece]);
 
   // Merge the active piece into the solid board grid
   const mergePieceToBoard = useCallback((piece: Tetromino, currentBoard: Board) => {
@@ -651,7 +671,7 @@ export default function RetroBlocksGame() {
             setHasNewHighScore(checkIsHighScore(score + points));
           } else {
             setCurrentPiece(spawnPiece);
-            setNextPieces((prev) => [...prev.slice(1), getRandomTetromino()]);
+            setNextPieces((prev) => [...prev.slice(1), drawNextPiece()]);
           }
         }
         
@@ -675,12 +695,12 @@ export default function RetroBlocksGame() {
           setHasNewHighScore(checkIsHighScore(score));
         } else {
           setCurrentPiece(spawnPiece);
-          setNextPieces((prev) => [...prev.slice(1), getRandomTetromino()]);
+          setNextPieces((prev) => [...prev.slice(1), drawNextPiece()]);
         }
       }
       nextStepTimeRef.current = performance.now() + getFallSpeed(speedMode, lines);
     }
-  }, [nextPieces, score, lines, speedMode, checkCollision]);
+  }, [nextPieces, score, lines, speedMode, checkCollision, drawNextPiece]);
 
   // Soft drop (moves down one square, scores 1 point)
   const moveDown = useCallback(() => {
