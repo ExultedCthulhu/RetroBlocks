@@ -30,8 +30,8 @@ export default function OnScreenControls({
   isPaused,
 }: OnScreenControlsProps) {
   return (
-    <div className="w-full max-w-md mx-auto mt-2 bg-zinc-900/90 border-2 border-zinc-800 p-4 rounded-xl shadow-[0_-5px_15px_rgba(0,0,0,0.5)] md:hidden">
-      <div className="flex justify-between items-center mb-3">
+    <div className="w-full max-w-md mx-auto mt-1 bg-zinc-900/90 border-2 border-zinc-800 p-3 rounded-xl shadow-[0_-5px_15px_rgba(0,0,0,0.5)] md:hidden">
+      <div className="flex justify-between items-center mb-2.5">
         <span className="font-retro text-[8px] text-zinc-500 uppercase tracking-widest">
           Mobile Controller
         </span>
@@ -44,70 +44,64 @@ export default function OnScreenControls({
         </button>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
-        {/* Left Side: Retro D-Pad */}
-        <div className="relative w-36 h-36 mx-auto flex items-center justify-center">
-          {/* D-Pad background container */}
-          <div className="absolute w-28 h-28 bg-zinc-950 rounded-lg border border-zinc-800" />
-
-          {/* UP Button (Rotate) */}
+      <div className="grid grid-cols-2 gap-2 max-w-sm mx-auto">
+        {/* Left Side: Keyboard-style Arrow Keys (Inverted-T) */}
+        <div className="grid grid-cols-3 gap-2 w-[148px] h-24 mx-auto select-none">
+          {/* Row 1 */}
+          <div /> {/* Empty top-left */}
           <button
             onTouchStart={(e) => {
               e.preventDefault();
               onRotate();
             }}
             onClick={onRotate}
-            className="absolute top-0 w-11 h-11 bg-zinc-800 active:bg-cyan-500 border-2 border-zinc-700 text-white rounded-t-md flex items-center justify-center shadow-lg active:scale-95 transition-all"
+            className="w-11 h-11 bg-zinc-800 active:bg-cyan-500 border-2 border-zinc-700 text-white rounded-md flex items-center justify-center shadow-lg active:scale-95 transition-all"
             aria-label="Rotate (Up)"
           >
             <ArrowUp className="w-5 h-5 text-cyan-400" />
           </button>
+          <div /> {/* Empty top-right */}
 
-          {/* LEFT Button */}
+          {/* Row 2 */}
           <button
             onTouchStart={(e) => {
               e.preventDefault();
               onMoveLeft();
             }}
             onClick={onMoveLeft}
-            className="absolute left-0 w-11 h-11 bg-zinc-800 active:bg-cyan-500 border-2 border-zinc-700 text-white rounded-l-md flex items-center justify-center shadow-lg active:scale-95 transition-all"
+            className="w-11 h-11 bg-zinc-800 active:bg-cyan-500 border-2 border-zinc-700 text-white rounded-md flex items-center justify-center shadow-lg active:scale-95 transition-all"
             aria-label="Move Left"
           >
             <ArrowLeft className="w-5 h-5 text-cyan-400" />
           </button>
 
-          {/* Center piece */}
-          <div className="absolute w-10 h-10 bg-zinc-900 z-10 border border-zinc-800 rounded-sm" />
-
-          {/* RIGHT Button */}
-          <button
-            onTouchStart={(e) => {
-              e.preventDefault();
-              onMoveRight();
-            }}
-            onClick={onMoveRight}
-            className="absolute right-0 w-11 h-11 bg-zinc-800 active:bg-cyan-500 border-2 border-zinc-700 text-white rounded-r-md flex items-center justify-center shadow-lg active:scale-95 transition-all"
-            aria-label="Move Right"
-          >
-            <ArrowRight className="w-5 h-5 text-cyan-400" />
-          </button>
-
-          {/* DOWN Button (Soft Drop) */}
           <button
             onTouchStart={(e) => {
               e.preventDefault();
               onSoftDrop();
             }}
             onClick={onSoftDrop}
-            className="absolute bottom-0 w-11 h-11 bg-zinc-800 active:bg-cyan-500 border-2 border-zinc-700 text-white rounded-b-md flex items-center justify-center shadow-lg active:scale-95 transition-all"
+            className="w-11 h-11 bg-zinc-800 active:bg-cyan-500 border-2 border-zinc-700 text-white rounded-md flex items-center justify-center shadow-lg active:scale-95 transition-all"
             aria-label="Move Down (Soft Drop)"
           >
             <ArrowDown className="w-5 h-5 text-cyan-400" />
           </button>
+
+          <button
+            onTouchStart={(e) => {
+              e.preventDefault();
+              onMoveRight();
+            }}
+            onClick={onMoveRight}
+            className="w-11 h-11 bg-zinc-800 active:bg-cyan-500 border-2 border-zinc-700 text-white rounded-md flex items-center justify-center shadow-lg active:scale-95 transition-all"
+            aria-label="Move Right"
+          >
+            <ArrowRight className="w-5 h-5 text-cyan-400" />
+          </button>
         </div>
 
-        {/* Right Side: Action Buttons */}
-        <div className="flex flex-col justify-center items-center gap-3">
+        {/* Right Side: Action Buttons aligned with Left Side */}
+        <div className="flex flex-col justify-between items-center h-24 w-[148px] mx-auto select-none">
           {/* Hard Drop Button (Space) */}
           <button
             onTouchStart={(e) => {

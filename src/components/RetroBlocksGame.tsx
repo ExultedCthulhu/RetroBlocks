@@ -122,6 +122,7 @@ export default function RetroBlocksGame() {
   const [hasNewHighScore, setHasNewHighScore] = useState<boolean>(false);
   const [playerName, setPlayerName] = useState<string>('');
   const [isSaved, setIsSaved] = useState<boolean>(false);
+  const [leaderboardKey, setLeaderboardKey] = useState<number>(0);
 
   // New Custom States
   const [speedMode, setSpeedMode] = useState<SpeedMode>(() => {
@@ -219,6 +220,16 @@ export default function RetroBlocksGame() {
   const isSavedRef = useRef<boolean>(false);
   const playerNameRef = useRef<string>('');
   const scoreRef = useRef<number>(0);
+
+  // Touchscreen Support Refs
+  const touchStartXRef = useRef<number>(0);
+  const touchStartYRef = useRef<number>(0);
+  const touchStartTimeRef = useRef<number>(0);
+  const lastMiddleTapTimeRef = useRef<number>(0);
+  const isSwipingRef = useRef<boolean>(false);
+  const swipeHoldIntervalRef = useRef<any>(null);
+  const hasTriggeredSwipeRef = useRef<boolean>(false);
+  const hasTriggeredHardDropRef = useRef<boolean>(false);
 
   useEffect(() => {
     hasNewHighScoreRef.current = hasNewHighScore;
@@ -399,6 +410,7 @@ export default function RetroBlocksGame() {
     saveHighScore(finalName, scoreRef.current, linesRef.current);
     setIsSaved(true);
     setStatus('MENU');
+    setLeaderboardKey((prev) => prev + 1);
   }, []);
 
   // Move current piece left
@@ -706,6 +718,155 @@ export default function RetroBlocksGame() {
     }
   }, [status, musicEnabled, speedMode, lines]);
 
+  const clearTouchInterval = useCallback(() => {
+    if (swipeHoldIntervalRef.current) {
+      clearInterval(swipeHoldIntervalRef.current);
+      swipeHoldIntervalRef.current = null;
+    }
+  }, []);
+
+  // Clean touch intervals on unmount
+  useEffect(() => {
+    return () => {
+      if (swipeHoldIntervalRef.current) {
+        clearInterval(swipeHoldIntervalRef.current);
+      }
+    };
+  }, []);
+
+  const handleTouchStart = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
+    if (statusRef.current !== 'PLAYING') return;
+
+    const touch = e.touches[0];
+    const container = e.currentTarget;
+    const rect = container.getBoundingClientRect();
+
+    touchStartXRef.current = touch.clientX;
+    touchStartYRef.current = touch.clientY;
+    touchStartTimeRef.current = Date.now();
+    isSwipingRef.current = false;
+    hasTriggeredSwipeRef.current = false;
+    hasTriggeredHardDropRef.current = false;
+
+    clearTouchInterval();
+  }, [clearTouchInterval]);
+
+  const handleTouchMove = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
+    if (statusRef.current !== 'PLAYING') return;
+    if (hasTriggeredHardDropRef.current) return;
+
+    const touch = e.touches[0];
+    const dx = touch.clientX - touchStartXRef.current;
+    const dy = touch.clientY - touchStartYRef.current;
+
+    // Prevent scrolling or bouncing when interacting on the board
+    if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
+      if (e.cancelable) {
+        e.preventDefault();
+      }
+    }
+
+    const absDx = Math.abs(dx);
+    const absDy = Math.abs(dy);
+
+    // Declaring a swipe if displacement exceeds 20px
+    if (!isSwipingRef.current && (absDx > 20 || absDy > 20)) {
+      isSwipingRef.current = true;
+    }
+
+    if (isSwipingRef.current) {
+      if (absDx > absDy) {
+        // Horizontal Swipe
+        if (!hasTriggeredSwipeRef.current) {
+          hasTriggeredSwipeRef.current = true;
+          const direction = dx > 0 ? 'right' : 'left';
+          
+          if (direction === 'left') {
+            moveLeft();
+            clearTouchInterval();
+            swipeHoldIntervalRef.current = setInterval(() => {
+              if (statusRef.current === 'PLAYING') {
+                moveLeft();
+              }
+            }, 180);
+          } else {
+            moveRight();
+            clearTouchInterval();
+            swipeHoldIntervalRef.current = setInterval(() => {
+              if (statusRef.current === 'PLAYING') {
+                moveRight();
+              }
+            }, 180);
+          }
+        }
+      } else {
+        // Vertical Swipe
+        if (dy > 0) {
+          if (dy >= 120) {
+            // Long swipe down: Hard Drop!
+            clearTouchInterval();
+            hardDrop();
+            hasTriggeredHardDropRef.current = true;
+          } else if (dy > 25 && !hasTriggeredSwipeRef.current) {
+            // Small swipe down and hold: continuously moves down
+            hasTriggeredSwipeRef.current = true;
+            moveDown();
+            clearTouchInterval();
+            swipeHoldIntervalRef.current = setInterval(() => {
+              if (statusRef.current === 'PLAYING') {
+                moveDown();
+              }
+            }, 100);
+          }
+        }
+      }
+    }
+  }, [moveLeft, moveRight, moveDown, hardDrop, clearTouchInterval]);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
+    clearTouchInterval();
+
+    if (statusRef.current !== 'PLAYING') return;
+    if (hasTriggeredHardDropRef.current) return;
+
+    if (!isSwipingRef.current) {
+      const container = e.currentTarget;
+      const rect = container.getBoundingClientRect();
+      const relativeX = (touchStartXRef.current - rect.left) / rect.width;
+      const relativeY = (touchStartYRef.current - rect.top) / rect.height;
+
+      if (relativeX >= 0 && relativeX <= 1 && relativeY >= 0 && relativeY <= 1) {
+        // 1. Tapping top 1/8 pauses game
+        if (relativeY < 0.125) {
+          togglePause();
+          return;
+        }
+
+        // 2. Tapping close to edges (1/8 of width) moves block in that direction
+        if (relativeX < 0.125) {
+          moveLeft();
+        } else if (relativeX > 0.875) {
+          moveRight();
+        } else {
+          // 3. Single tapping middle (3/4 of width) rotates piece CW
+          // A single rapid double tap of middle activates hold piece
+          const now = Date.now();
+          if (now - lastMiddleTapTimeRef.current < 300) {
+            holdPiece();
+            lastMiddleTapTimeRef.current = 0;
+          } else {
+            rotate();
+            lastMiddleTapTimeRef.current = now;
+          }
+        }
+      }
+    }
+  }, [moveLeft, moveRight, rotate, holdPiece, togglePause, clearTouchInterval]);
+
+  const handleTouchCancel = useCallback(() => {
+    clearTouchInterval();
+  }, [clearTouchInterval]);
+
   // Keyboard controls listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -938,7 +1099,7 @@ export default function RetroBlocksGame() {
       <header className="w-full max-w-5xl flex flex-col md:flex-row md:items-end justify-between border-b-4 border-slate-800 pb-4 mb-6 z-30 gap-4">
         <div>
           <h1 className="text-3xl md:text-5xl font-black tracking-tighter text-blue-500 uppercase">RetroBlocks</h1>
-          <p className="text-[10px] text-slate-500 tracking-[0.25em] uppercase mt-1">Retro block puzzle game // v1.0.4</p>
+          <p className="text-[10px] text-slate-500 tracking-[0.25em] uppercase mt-1">Block-falling puzzle game // v1.0.1</p>
         </div>
         
         <div className="flex flex-wrap items-end gap-6">
@@ -1048,13 +1209,13 @@ export default function RetroBlocksGame() {
       </header>
 
       {/* MAIN LAYOUT */}
-      <main className="w-full max-w-5xl flex-1 flex flex-col md:grid md:grid-cols-12 gap-6 items-start z-10 mb-4">
+      <main className="w-full max-w-5xl flex-1 flex flex-col md:grid md:grid-cols-12 gap-4 md:gap-6 items-start z-10 mb-2 md:mb-4">
         
         {/* LEFT COLUMN: PREVIEWS & LEADERBOARD */}
-        <div className="w-full md:col-span-4 flex flex-col gap-6">
+        <div className="w-full md:col-span-4 flex flex-col gap-4 md:gap-6">
           
           {/* RESPONSIVE PREVIEWS GRID */}
-          <div className="grid grid-cols-2 md:grid-cols-1 gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-1 gap-3 md:gap-4">
             {/* HOLD PIECE PREVIEW */}
             <div className="bg-slate-900/50 border-2 border-slate-800 p-4 rounded-xl flex flex-col items-center justify-center min-h-[140px] shadow-lg relative overflow-hidden">
               <p className="text-[10px] text-slate-500 uppercase tracking-widest mb-3">Hold Piece</p>
@@ -1144,13 +1305,21 @@ export default function RetroBlocksGame() {
           </div>
 
           {/* LEADERBOARD VIEW */}
-          <Leaderboard />
+          <div className="hidden md:block">
+            <Leaderboard key={leaderboardKey} />
+          </div>
         </div>
 
         {/* CENTER COLUMN: THE MAIN BOARD */}
         <div className="w-full md:col-span-5 flex flex-col items-center justify-center">
           
-          <div className="relative border-4 border-slate-800 bg-[#0a0a0a] rounded-xl shadow-[0_0_30px_rgba(0,0,0,0.8)] overflow-hidden">
+          <div 
+            onTouchStart={handleTouchStart}
+            onTouchMove={handleTouchMove}
+            onTouchEnd={handleTouchEnd}
+            onTouchCancel={handleTouchCancel}
+            className="relative border-4 border-slate-800 bg-[#0a0a0a] rounded-xl shadow-[0_0_30px_rgba(0,0,0,0.8)] overflow-hidden touch-none"
+          >
             {/* Play overlay / Pause overlay / Game over screen */}
             {status === 'MENU' && (
               <div className="absolute inset-0 bg-slate-950/95 z-30 flex flex-col items-center justify-center p-6 text-center">
@@ -1358,10 +1527,10 @@ export default function RetroBlocksGame() {
         </div>
 
         {/* RIGHT COLUMN: STATS & CONTROLS */}
-        <div className="w-full md:col-span-3 flex flex-col gap-6">
+        <div className="hidden md:flex w-full md:col-span-3 flex-col gap-6">
           
           {/* Stats Card */}
-          <div className="bg-slate-900/50 border-2 border-slate-800 p-4 rounded-xl flex flex-col gap-3.5 shadow-lg">
+          <div className="hidden md:flex bg-slate-900/50 border-2 border-slate-800 p-4 rounded-xl flex-col gap-3.5 shadow-lg">
             <div className="flex items-center justify-between border-b border-slate-800/60 pb-2">
               <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">SCORE</span>
               <span className="text-xl font-bold text-yellow-400 font-mono tracking-wide">{score.toLocaleString().padStart(6, '0')}</span>
@@ -1383,7 +1552,7 @@ export default function RetroBlocksGame() {
           </div>
 
           {/* Controls Card */}
-          <div className="bg-slate-900/50 border-2 border-slate-800 p-4 rounded-xl">
+          <div className="hidden md:block bg-slate-900/50 border-2 border-slate-800 p-4 rounded-xl">
             <p className="text-[10px] text-slate-500 uppercase tracking-widest mb-3">Controls</p>
             <div className="grid grid-cols-2 gap-y-2 text-[10px] text-slate-400 font-sans">
               <div className="font-bold text-white font-mono">

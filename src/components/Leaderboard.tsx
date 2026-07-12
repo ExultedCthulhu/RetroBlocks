@@ -7,14 +7,14 @@ import React, { useState, useEffect } from 'react';
 import { LeaderboardEntry } from '../types';
 import { Trophy, Star } from 'lucide-react';
 
-const LOCAL_STORAGE_KEY = 'retroblocks_high_scores';
+const LOCAL_STORAGE_KEY = 'retroblocks_high_scores_v2';
 
 const DEFAULT_SCORES: LeaderboardEntry[] = [
-  { name: 'GEMINI', score: 10000, lines: 40, date: '2026-07-11' },
-  { name: 'TRON', score: 7500, lines: 30, date: '2026-05-15' },
-  { name: 'LOVELACE', score: 5000, lines: 20, date: '2026-03-22' },
-  { name: 'HAL9000', score: 3000, lines: 12, date: '2026-02-01' },
-  { name: 'WOPR', score: 1500, lines: 6, date: '2026-01-10' },
+  { name: 'GEMINI', score: 50000, lines: 100, date: '2026-07-11' },
+  { name: 'TRON', score: 40000, lines: 80, date: '2026-05-15' },
+  { name: 'LOVELACE', score: 30000, lines: 60, date: '2026-03-22' },
+  { name: 'HAL9000', score: 20000, lines: 40, date: '2026-02-01' },
+  { name: 'WOPR', score: 10000, lines: 20, date: '2026-01-10' },
 ];
 
 export function getHighScores(): LeaderboardEntry[] {
@@ -44,7 +44,7 @@ export function saveHighScore(name: string, score: number, lines: number): void 
 
   const updated = [...scores, newEntry]
     .sort((a, b) => b.score - a.score)
-    .slice(0, 7); // Save top 7 scores
+    .slice(0, 5); // Remain at exactly top 5 scores
 
   window.localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(updated));
 }
