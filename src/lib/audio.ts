@@ -27,6 +27,7 @@ class RetroAudioEngine {
   // Safari Tab Flicker Fix State
   private keepAliveOsc: OscillatorNode | null = null;
   private silentGain: GainNode | null = null;
+  private suspendTimeoutId: any = null;
 
   constructor() {
     // Try to load initial settings from localStorage
@@ -60,6 +61,10 @@ class RetroAudioEngine {
   }
 
   private initCtx() {
+    if (this.suspendTimeoutId) {
+      clearTimeout(this.suspendTimeoutId);
+      this.suspendTimeoutId = null;
+    }
     if (!this.ctx) {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       if (AudioCtx) {
@@ -87,6 +92,30 @@ class RetroAudioEngine {
     }
   }
 
+  private scheduleSuspend() {
+    if (this.suspendTimeoutId) {
+      clearTimeout(this.suspendTimeoutId);
+      this.suspendTimeoutId = null;
+    }
+    if (!this.schedulerIntervalId && this.ctx && this.ctx.state === 'running') {
+      this.suspendTimeoutId = setTimeout(() => {
+        if (!this.schedulerIntervalId && this.ctx && this.ctx.state === 'running') {
+          this.ctx.suspend().catch(err => console.error("Failed to suspend AudioContext:", err));
+        }
+      }, 2000); // Suspend after 2 seconds of silence
+    }
+  }
+
+  private suspendImmediately() {
+    if (this.suspendTimeoutId) {
+      clearTimeout(this.suspendTimeoutId);
+      this.suspendTimeoutId = null;
+    }
+    if (this.ctx && this.ctx.state === 'running') {
+      this.ctx.suspend().catch(err => console.error("Failed to suspend AudioContext:", err));
+    }
+  }
+
   public toggleSoundEffects(): boolean {
     this.sfxEnabled = !this.sfxEnabled;
     if (typeof window !== 'undefined') {
@@ -94,6 +123,10 @@ class RetroAudioEngine {
     }
     if (this.sfxEnabled) {
       this.playRotate();
+    } else {
+      if (!this.schedulerIntervalId) {
+        this.suspendImmediately();
+      }
     }
     return this.sfxEnabled;
   }
@@ -197,6 +230,8 @@ class RetroAudioEngine {
 
     osc.start();
     osc.stop(this.ctx.currentTime + duration);
+
+    this.scheduleSuspend();
   }
 
   public playMove() {
@@ -253,6 +288,7 @@ class RetroAudioEngine {
       osc.start(now + timeOffset);
       osc.stop(now + timeOffset + 0.3);
     }
+    this.scheduleSuspend();
   }
 
   public playGameOver() {
@@ -288,6 +324,7 @@ class RetroAudioEngine {
       osc.start(now + timeOffset);
       osc.stop(now + timeOffset + 0.5);
     }
+    this.scheduleSuspend();
   }
 
   // --- Background Music (BGM) Engine ---
@@ -651,6 +688,7 @@ class RetroAudioEngine {
       clearInterval(this.schedulerIntervalId);
       this.schedulerIntervalId = null;
     }
+    this.scheduleSuspend();
   }
 }
 
