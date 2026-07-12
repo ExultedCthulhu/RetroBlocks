@@ -24,6 +24,10 @@ class RetroAudioEngine {
   private harmonyPattern: number[] = [];
   private bassPattern: number[] = [];
 
+  // Safari Tab Flicker Fix State
+  private keepAliveOsc: OscillatorNode | null = null;
+  private silentGain: GainNode | null = null;
+
   constructor() {
     // Try to load initial settings from localStorage
     if (typeof window !== 'undefined') {
@@ -60,8 +64,24 @@ class RetroAudioEngine {
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       if (AudioCtx) {
         this.ctx = new AudioCtx();
+        
+        // --- BULLETPROOF SAFARI FIX ---
+        // 1. Assign to class properties to prevent Garbage Collection
+        this.keepAliveOsc = this.ctx.createOscillator();
+        this.silentGain = this.ctx.createGain();
+        
+        // 2. Use a microscopic value instead of absolute 0 to bypass the optimizer
+        this.silentGain.gain.value = 0.00001; 
+        
+        this.keepAliveOsc.connect(this.silentGain);
+        this.silentGain.connect(this.ctx.destination);
+        
+        this.keepAliveOsc.start();
+        // ------------------------------
       }
     }
+    
+    // Ensure we actually resume the context if the browser suspended it
     if (this.ctx && this.ctx.state === 'suspended') {
       this.ctx.resume();
     }
