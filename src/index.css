@@ -38,6 +38,23 @@
   opacity: 0.85;
 }
 
+/* iOS Safari prevent magnifying glass, selection, and long-press callouts */
+body, 
+button, 
+div, 
+span, 
+canvas {
+  -webkit-touch-callout: none !important;
+  -webkit-user-select: none !important;
+  user-select: none !important;
+}
+
+/* Prevent double-tap to zoom on buttons and interactive containers */
+button,
+.touch-action-none {
+  touch-action: none !important;
+}
+
 /* Pixel border for vintage pixel aesthetics */
 .pixel-border {
   border: 4px solid #ffffff;

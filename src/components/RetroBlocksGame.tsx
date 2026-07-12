@@ -1248,7 +1248,11 @@ export default function RetroBlocksGame() {
           {/* RESPONSIVE PREVIEWS GRID */}
           <div className="grid grid-cols-2 md:grid-cols-1 gap-3 md:gap-4">
             {/* HOLD PIECE PREVIEW */}
-            <div className="bg-slate-900/50 border-2 border-slate-800 p-4 rounded-xl flex flex-col items-center justify-center min-h-[140px] shadow-lg relative overflow-hidden">
+            <div
+              onClick={holdPiece}
+              className="bg-slate-900/50 border-2 border-slate-800 p-4 rounded-xl flex flex-col items-center justify-center min-h-[140px] shadow-lg relative overflow-hidden cursor-pointer select-none touch-none"
+              title="Click/Tap to Hold Piece"
+            >
               <p className="text-[10px] text-slate-500 uppercase tracking-widest mb-3">Hold Piece</p>
               {heldPiece ? (
                 <div className="grid gap-0.5 bg-black/40 p-2 rounded-lg border border-slate-800/80 scale-90 origin-center">
