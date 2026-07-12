@@ -231,6 +231,25 @@ export default function RetroBlocksGame() {
   const hasTriggeredSwipeRef = useRef<boolean>(false);
   const hasTriggeredHardDropRef = useRef<boolean>(false);
 
+  // Refs for callbacks to prevent stale closures in touch event intervals
+  const moveLeftRef = useRef<() => void>(() => {});
+  const moveRightRef = useRef<() => void>(() => {});
+  const moveDownRef = useRef<() => void>(() => {});
+  const hardDropRef = useRef<() => void>(() => {});
+  const holdPieceRef = useRef<() => void>(() => {});
+  const rotateRef = useRef<() => void>(() => {});
+  const togglePauseRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    moveLeftRef.current = moveLeft;
+    moveRightRef.current = moveRight;
+    moveDownRef.current = moveDown;
+    hardDropRef.current = hardDrop;
+    holdPieceRef.current = holdPiece;
+    rotateRef.current = rotate;
+    togglePauseRef.current = togglePause;
+  });
+
   useEffect(() => {
     hasNewHighScoreRef.current = hasNewHighScore;
   }, [hasNewHighScore]);
@@ -782,19 +801,19 @@ export default function RetroBlocksGame() {
           const direction = dx > 0 ? 'right' : 'left';
           
           if (direction === 'left') {
-            moveLeft();
+            moveLeftRef.current();
             clearTouchInterval();
             swipeHoldIntervalRef.current = setInterval(() => {
               if (statusRef.current === 'PLAYING') {
-                moveLeft();
+                moveLeftRef.current();
               }
             }, 180);
           } else {
-            moveRight();
+            moveRightRef.current();
             clearTouchInterval();
             swipeHoldIntervalRef.current = setInterval(() => {
               if (statusRef.current === 'PLAYING') {
-                moveRight();
+                moveRightRef.current();
               }
             }, 180);
           }
@@ -805,23 +824,23 @@ export default function RetroBlocksGame() {
           if (dy >= 120) {
             // Long swipe down: Hard Drop!
             clearTouchInterval();
-            hardDrop();
+            hardDropRef.current();
             hasTriggeredHardDropRef.current = true;
           } else if (dy > 25 && !hasTriggeredSwipeRef.current) {
             // Small swipe down and hold: continuously moves down
             hasTriggeredSwipeRef.current = true;
-            moveDown();
+            moveDownRef.current();
             clearTouchInterval();
             swipeHoldIntervalRef.current = setInterval(() => {
               if (statusRef.current === 'PLAYING') {
-                moveDown();
+                moveDownRef.current();
               }
             }, 100);
           }
         }
       }
     }
-  }, [moveLeft, moveRight, moveDown, hardDrop, clearTouchInterval]);
+  }, [clearTouchInterval]);
 
   const handleTouchEnd = useCallback((e: React.TouchEvent<HTMLDivElement>) => {
     clearTouchInterval();
@@ -838,30 +857,22 @@ export default function RetroBlocksGame() {
       if (relativeX >= 0 && relativeX <= 1 && relativeY >= 0 && relativeY <= 1) {
         // 1. Tapping top 1/8 pauses game
         if (relativeY < 0.125) {
-          togglePause();
+          togglePauseRef.current();
           return;
         }
 
         // 2. Tapping close to edges (1/8 of width) moves block in that direction
         if (relativeX < 0.125) {
-          moveLeft();
+          moveLeftRef.current();
         } else if (relativeX > 0.875) {
-          moveRight();
+          moveRightRef.current();
         } else {
           // 3. Single tapping middle (3/4 of width) rotates piece CW
-          // A single rapid double tap of middle activates hold piece
-          const now = Date.now();
-          if (now - lastMiddleTapTimeRef.current < 300) {
-            holdPiece();
-            lastMiddleTapTimeRef.current = 0;
-          } else {
-            rotate();
-            lastMiddleTapTimeRef.current = now;
-          }
+          rotateRef.current();
         }
       }
     }
-  }, [moveLeft, moveRight, rotate, holdPiece, togglePause, clearTouchInterval]);
+  }, [clearTouchInterval]);
 
   const handleTouchCancel = useCallback(() => {
     clearTouchInterval();

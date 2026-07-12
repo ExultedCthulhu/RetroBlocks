@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import { ArrowLeft, ArrowRight, ArrowUp, ArrowDown, ArrowDownToLine, Pause, Play } from 'lucide-react';
 
 interface OnScreenControlsProps {
@@ -29,6 +29,44 @@ export default function OnScreenControls({
   onTogglePause,
   isPaused,
 }: OnScreenControlsProps) {
+  const softDropIntervalRef = useRef<any>(null);
+  const softDropTimeoutRef = useRef<any>(null);
+
+  // Use a ref to ensure the repeating interval always uses the latest callback
+  const onSoftDropRef = useRef(onSoftDrop);
+  useEffect(() => {
+    onSoftDropRef.current = onSoftDrop;
+  }, [onSoftDrop]);
+
+  const startSoftDrop = () => {
+    stopSoftDrop();
+    onSoftDropRef.current();
+    
+    // Start repeating soft drop after 200ms delay, triggering every 80ms
+    softDropTimeoutRef.current = setTimeout(() => {
+      softDropIntervalRef.current = setInterval(() => {
+        onSoftDropRef.current();
+      }, 80);
+    }, 200);
+  };
+
+  const stopSoftDrop = () => {
+    if (softDropTimeoutRef.current) {
+      clearTimeout(softDropTimeoutRef.current);
+      softDropTimeoutRef.current = null;
+    }
+    if (softDropIntervalRef.current) {
+      clearInterval(softDropIntervalRef.current);
+      softDropIntervalRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      stopSoftDrop();
+    };
+  }, []);
+
   return (
     <div className="w-full max-w-md mx-auto mt-1 bg-zinc-900/90 border-2 border-zinc-800 p-3 rounded-xl shadow-[0_-5px_15px_rgba(0,0,0,0.5)] md:hidden">
       <div className="flex justify-between items-center mb-2.5">
@@ -50,11 +88,10 @@ export default function OnScreenControls({
           {/* Row 1 */}
           <div /> {/* Empty top-left */}
           <button
-            onTouchStart={(e) => {
+            onPointerDown={(e) => {
               e.preventDefault();
               onRotate();
             }}
-            onClick={onRotate}
             className="w-11 h-11 bg-zinc-800 active:bg-cyan-500 border-2 border-zinc-700 text-white rounded-md flex items-center justify-center shadow-lg active:scale-95 transition-all"
             aria-label="Rotate (Up)"
           >
@@ -64,11 +101,10 @@ export default function OnScreenControls({
 
           {/* Row 2 */}
           <button
-            onTouchStart={(e) => {
+            onPointerDown={(e) => {
               e.preventDefault();
               onMoveLeft();
             }}
-            onClick={onMoveLeft}
             className="w-11 h-11 bg-zinc-800 active:bg-cyan-500 border-2 border-zinc-700 text-white rounded-md flex items-center justify-center shadow-lg active:scale-95 transition-all"
             aria-label="Move Left"
           >
@@ -76,11 +112,13 @@ export default function OnScreenControls({
           </button>
 
           <button
-            onTouchStart={(e) => {
+            onPointerDown={(e) => {
               e.preventDefault();
-              onSoftDrop();
+              startSoftDrop();
             }}
-            onClick={onSoftDrop}
+            onPointerUp={stopSoftDrop}
+            onPointerLeave={stopSoftDrop}
+            onPointerCancel={stopSoftDrop}
             className="w-11 h-11 bg-zinc-800 active:bg-cyan-500 border-2 border-zinc-700 text-white rounded-md flex items-center justify-center shadow-lg active:scale-95 transition-all"
             aria-label="Move Down (Soft Drop)"
           >
@@ -88,11 +126,10 @@ export default function OnScreenControls({
           </button>
 
           <button
-            onTouchStart={(e) => {
+            onPointerDown={(e) => {
               e.preventDefault();
               onMoveRight();
             }}
-            onClick={onMoveRight}
             className="w-11 h-11 bg-zinc-800 active:bg-cyan-500 border-2 border-zinc-700 text-white rounded-md flex items-center justify-center shadow-lg active:scale-95 transition-all"
             aria-label="Move Right"
           >
@@ -104,11 +141,10 @@ export default function OnScreenControls({
         <div className="flex flex-col justify-between items-center h-24 w-[148px] mx-auto select-none">
           {/* Hard Drop Button (Space) */}
           <button
-            onTouchStart={(e) => {
+            onPointerDown={(e) => {
               e.preventDefault();
               onHardDrop();
             }}
-            onClick={onHardDrop}
             className="w-16 h-16 bg-red-600 active:bg-red-500 border-4 border-zinc-950 rounded-full flex flex-col items-center justify-center text-white shadow-xl active:scale-90 transition-all cursor-pointer relative"
             aria-label="Hard Drop"
           >
@@ -124,28 +160,26 @@ export default function OnScreenControls({
             {/* Hold Button */}
             {onHold && (
               <button
-                onTouchStart={(e) => {
+                onPointerDown={(e) => {
                   e.preventDefault();
                   onHold();
                 }}
-                onClick={onHold}
                 className="py-1 px-1 bg-yellow-600 active:bg-yellow-500 border border-yellow-700 text-[6px] tracking-tight font-retro font-black rounded uppercase active:scale-95 transition-all w-[60px]"
               >
-                HOLD [X]
+                HOLD
               </button>
             )}
             
             {/* Rotate CCW Button */}
             {onRotateCCW && (
               <button
-                onTouchStart={(e) => {
+                onPointerDown={(e) => {
                   e.preventDefault();
                   onRotateCCW();
                 }}
-                onClick={onRotateCCW}
                 className="py-1 px-1 bg-purple-600 active:bg-purple-500 border border-purple-700 text-[6px] tracking-tight font-retro font-black rounded uppercase active:scale-95 transition-all w-[60px]"
               >
-                ROT CCW [Z]
+                ROT CCW
               </button>
             )}
           </div>
