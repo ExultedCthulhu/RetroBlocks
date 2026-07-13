@@ -5,7 +5,6 @@
 
 import React, { useState, useEffect } from 'react';
 import { LeaderboardEntry } from '../types';
-import { Trophy, Star } from 'lucide-react';
 
 const LOCAL_STORAGE_KEY = 'retroblocks_high_scores_v2';
 
@@ -103,19 +102,16 @@ export default function Leaderboard() {
               className="flex items-center justify-between py-2.5 px-1 transition-all duration-300 gap-2 hover:bg-white/[0.01]"
             >
               <div className="flex items-center gap-3 flex-1 min-w-0">
-                <span className={`text-sm font-bold shrink-0 ${rankColor} w-6`}>
-                  {String(index + 1).padStart(2, '0')}
+                <span className={`text-sm font-bold shrink-0 ${rankColor} w-4`}>
+                  {index + 1}
                 </span>
                 <span className="font-bold text-white tracking-widest text-[11px] truncate" title={entry.name}>
                   {entry.name}
                 </span>
               </div>
-              <div className="flex items-center gap-1.5 shrink-0">
-                <span className="text-slate-500 flex items-center gap-0.5 w-9 justify-end text-[10px]">
-                  <Star className="w-3 h-3 text-yellow-500 shrink-0" /> {entry.lines}L
-                </span>
-                <span className={`font-mono text-xs font-bold ${scoreColor} w-14 text-right`}>
-                  {entry.score.toLocaleString()}
+              <div className="flex items-center shrink-0">
+                <span className={`font-mono text-xs font-bold ${scoreColor} text-right`}>
+                  {entry.score.toLocaleString()} / {entry.lines}L
                 </span>
               </div>
             </div>

@@ -284,6 +284,13 @@ export default function RetroBlocksGame() {
 
   // Refs for the game loop interval
   const nextStepTimeRef = useRef<number>(0);
+  const lastFrameTimeRef = useRef<number>(0);
+  const gravityAccumulatorRef = useRef<number>(0);
+  const unpauseTimeRef = useRef<number | null>(null);
+  const transitionStartTimeRef = useRef<number | null>(null);
+  const transitionStartFactorRef = useRef<number>(1.0);
+  const lastTargetSpeedFactorRef = useRef<number>(1.0);
+  const currentSpeedFactorRef = useRef<number>(1.0);
   const statusRef = useRef<GameStatus>('MENU');
   const keysPressedRef = useRef<{ left: boolean; right: boolean; down: boolean }>({
     left: false,
@@ -413,6 +420,12 @@ export default function RetroBlocksGame() {
     statusRef.current = status;
     if (status !== 'PLAYING') {
       keysPressedRef.current = { left: false, right: false, down: false };
+      lastFrameTimeRef.current = 0;
+      unpauseTimeRef.current = null;
+      transitionStartTimeRef.current = null;
+      transitionStartFactorRef.current = 1.0;
+      lastTargetSpeedFactorRef.current = 1.0;
+      currentSpeedFactorRef.current = 1.0;
     }
   }, [status]);
 
@@ -902,6 +915,7 @@ export default function RetroBlocksGame() {
         audioEngine.stopMusic();
       }
     } else if (status === 'PAUSED') {
+      unpauseTimeRef.current = performance.now();
       setStatus('PLAYING');
       nextStepTimeRef.current = performance.now() + getFallSpeed(speedMode, lines, incrementalMultiplier);
       if (musicEnabled) {
@@ -1070,6 +1084,38 @@ export default function RetroBlocksGame() {
         return;
       }
 
+      if (settingsOpen) {
+        const isInputFocused = document.activeElement?.tagName === 'INPUT';
+
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          if (document.activeElement instanceof HTMLElement) {
+            document.activeElement.blur();
+          }
+          audioEngine.playRotate();
+          setSettingsOpen(false);
+          return;
+        }
+
+        if (e.key === 'Enter') {
+          if (isInputFocused) {
+            // Let the input's onKeyDown handle finalizing the profile name.
+            // Do NOT close the settings screen.
+            return;
+          }
+          e.preventDefault();
+          audioEngine.playRotate();
+          setSettingsOpen(false);
+          return;
+        }
+
+        // If they are editing the profile name input, don't interfere with typing characters
+        if (isInputFocused) {
+          return;
+        }
+        return;
+      }
+
       const key = e.key.toLowerCase();
       const isAction = (action: keyof Keybindings) => {
         const [p, s] = keybindings[action];
@@ -1177,7 +1223,7 @@ export default function RetroBlocksGame() {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [moveLeft, moveRight, rotate, rotateCCW, moveDown, hardDrop, holdPiece, togglePause, keybindings, listeningAction, handleSaveScore]);
+  }, [moveLeft, moveRight, rotate, rotateCCW, moveDown, hardDrop, holdPiece, togglePause, keybindings, listeningAction, handleSaveScore, settingsOpen]);
 
   // Responsive game loop tick with DAS/ARR and lock delay support
   useEffect(() => {
@@ -1186,6 +1232,12 @@ export default function RetroBlocksGame() {
     const gameLoop = (time: number) => {
       if (statusRef.current === 'PLAYING') {
         const now = performance.now();
+        if (lastFrameTimeRef.current === 0) {
+          lastFrameTimeRef.current = now;
+        }
+        const deltaTime = now - lastFrameTimeRef.current;
+        lastFrameTimeRef.current = now;
+
         const piece = currentPieceRef.current;
         const currentBoard = boardRef.current;
 
@@ -1213,12 +1265,60 @@ export default function RetroBlocksGame() {
           }
 
           // 1. Gravity step (only if NOT grounded)
-          if (!isGrounded && now >= nextStepTimeRef.current) {
-            moveDown();
-            nextStepTimeRef.current = now + getFallSpeed(speedMode, linesRef.current, incrementalMultiplierRef.current);
-          } else if (isGrounded) {
-            // Push gravity timer forward so it doesn't queue ticks during lock delay
-            nextStepTimeRef.current = now + getFallSpeed(speedMode, linesRef.current, incrementalMultiplierRef.current);
+          if (!isGrounded) {
+            // Get target fall speed
+            const targetSpeed = getFallSpeed(speedMode, linesRef.current, incrementalMultiplierRef.current);
+            const targetSpeedFactor = 800 / targetSpeed; // speed relative to normal (800ms)
+
+            const targetChanged = Math.abs(targetSpeedFactor - lastTargetSpeedFactorRef.current) > 0.01;
+            const justUnpaused = unpauseTimeRef.current !== null;
+
+            if (justUnpaused) {
+              transitionStartTimeRef.current = now;
+              transitionStartFactorRef.current = 1.0; // Start at normal speed when unpausing
+              lastTargetSpeedFactorRef.current = targetSpeedFactor;
+              unpauseTimeRef.current = null;
+            } else if (targetChanged) {
+              transitionStartTimeRef.current = now;
+              // Start from whatever the actual speed factor was at this instant
+              transitionStartFactorRef.current = currentSpeedFactorRef.current;
+              lastTargetSpeedFactorRef.current = targetSpeedFactor;
+            }
+
+            let speedFactor = targetSpeedFactor;
+            if (transitionStartTimeRef.current !== null) {
+              const secondsSinceTransition = (now - transitionStartTimeRef.current) / 1000;
+              const startFactor = transitionStartFactorRef.current;
+
+              if (targetSpeedFactor > startFactor) {
+                // Ramping up: increase by 2.0 per second
+                const rampedSpeedFactor = startFactor + 2.0 * secondsSinceTransition;
+                if (rampedSpeedFactor >= targetSpeedFactor) {
+                  speedFactor = targetSpeedFactor;
+                  transitionStartTimeRef.current = null; // Transition complete
+                } else {
+                  speedFactor = rampedSpeedFactor;
+                }
+              } else {
+                // Instant transition when slowing down
+                speedFactor = targetSpeedFactor;
+                transitionStartTimeRef.current = null;
+              }
+            }
+
+            currentSpeedFactorRef.current = speedFactor;
+
+            // Accumulate gravity progress
+            gravityAccumulatorRef.current += deltaTime * speedFactor;
+
+            // When progress exceeds 800ms (one full normal step), move down
+            if (gravityAccumulatorRef.current >= 800) {
+              moveDown();
+              gravityAccumulatorRef.current = Math.max(0, gravityAccumulatorRef.current - 800);
+            }
+          } else {
+            // Reset gravity progress when grounded
+            gravityAccumulatorRef.current = 0;
           }
         }
 
@@ -1286,7 +1386,7 @@ export default function RetroBlocksGame() {
       <header className="w-full max-w-5xl flex flex-col md:flex-row md:items-end justify-between border-b-4 border-slate-800 pb-4 mb-6 z-30 gap-4">
         <div>
           <h1 className="text-3xl md:text-5xl font-black tracking-tighter text-blue-500 uppercase">RetroBlocks</h1>
-          <p className="text-[10px] text-slate-500 tracking-[0.25em] uppercase mt-1">Block-falling puzzle game // v1.0.1</p>
+          <p className="text-[10px] text-slate-500 tracking-[0.25em] uppercase mt-1">Block-falling puzzle game // v1.1</p>
         </div>
         
         <div className="flex flex-wrap items-end gap-6">
@@ -1791,15 +1891,6 @@ export default function RetroBlocksGame() {
                 <h3 className="text-sm font-black text-blue-500 tracking-wider">SYSTEM CONFIGURATION</h3>
                 <p className="text-[8px] text-slate-500 font-mono tracking-widest uppercase">Adjust sound, speed & mapping</p>
               </div>
-              <button
-                onClick={() => {
-                  audioEngine.playRotate();
-                  setSettingsOpen(false);
-                }}
-                className="p-1 border border-slate-800 hover:border-slate-500 hover:text-red-400 text-slate-400 rounded-md transition-colors cursor-pointer text-xs font-bold"
-              >
-                CLOSE [ESC]
-              </button>
             </div>
 
             {/* Modal Contents */}
@@ -2084,6 +2175,12 @@ export default function RetroBlocksGame() {
                     }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        if (e.nativeEvent) {
+                          e.nativeEvent.stopImmediatePropagation();
+                          e.nativeEvent.stopPropagation();
+                        }
                         const finalVal = profileName.trim() || 'LOCAL_PLAYER';
                         setProfileName(finalVal);
                         window.localStorage.setItem('retroblocks_profile_name', finalVal);
