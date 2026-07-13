@@ -60,23 +60,25 @@ const DEFAULT_KEYBINDINGS: Keybindings = {
   pause: ['Escape', 'p'],
 };
 
-const getFallSpeed = (mode: SpeedMode, linesCleared: number): number => {
+const getFallSpeed = (mode: SpeedMode, linesCleared: number, multiplier: number = 1): number => {
   switch (mode) {
     case 'REGULAR': return 800;
     case 'FAST': return 400;
     case 'EXTREME': return 200;
     case 'INCREMENTAL': {
       const level = Math.floor(linesCleared / 10);
-      return Math.max(100, 800 - (level * 50));
+      const baseSpeed = Math.max(100, 800 - (level * 50));
+      return Math.max(25, Math.floor(baseSpeed / multiplier));
     }
   }
 };
 
-const getIncrementalMultiplierString = (linesCleared: number): string => {
+const getIncrementalMultiplierString = (linesCleared: number, multiplier: number = 1): string => {
   const level = Math.floor(linesCleared / 10);
-  const speed = Math.max(100, 800 - (level * 50));
-  const multiplier = 800 / speed;
-  return `${multiplier.toFixed(1)}x`;
+  const baseSpeed = Math.max(100, 800 - (level * 50));
+  const finalSpeed = Math.max(25, Math.floor(baseSpeed / multiplier));
+  const mult = 800 / finalSpeed;
+  return `${mult.toFixed(1)}x`;
 };
 
 // Helper to create an empty board matrix
@@ -100,6 +102,82 @@ const createTetromino = (type: TetrominoType): Tetromino => {
   };
 };
 
+// Custom vertical slider component to ensure 100% cross-browser compatibility
+const CustomVerticalSlider = ({
+  value,
+  onChange,
+  colorClass = 'bg-blue-500',
+}: {
+  value: number;
+  onChange: (val: number) => void;
+  colorClass?: string;
+}) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const handleUpdate = (clientY: number) => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const height = rect.height;
+    const clickY = clientY - rect.top;
+    // 0 is bottom, 1 is top
+    const pct = 1 - Math.max(0, Math.min(1, clickY / height));
+    const rounded = Math.round(pct * 20) / 20; // Step size 0.05
+    onChange(rounded);
+  };
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    handleUpdate(e.clientY);
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      handleUpdate(moveEvent.clientY);
+    };
+
+    const handleMouseUp = () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  };
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    handleUpdate(e.touches[0].clientY);
+
+    const handleTouchMove = (moveEvent: TouchEvent) => {
+      handleUpdate(moveEvent.touches[0].clientY);
+    };
+
+    const handleTouchEnd = () => {
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleTouchEnd);
+    };
+
+    window.addEventListener('touchmove', handleTouchMove);
+    window.addEventListener('touchend', handleTouchEnd);
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      onMouseDown={handleMouseDown}
+      onTouchStart={handleTouchStart}
+      className="relative w-4 h-16 bg-slate-800 rounded-lg cursor-ns-resize flex items-end justify-center select-none touch-none border border-slate-700/50 p-0.5"
+    >
+      {/* Filled Track (from bottom up) */}
+      <div
+        style={{ height: `${value * 100}%` }}
+        className={`w-full rounded-md ${colorClass} transition-all duration-75`}
+      />
+      {/* Thumb/Handle indicator */}
+      <div
+        style={{ bottom: `calc(${value * 100}% - 4px)` }}
+        className="absolute w-5 h-2 bg-white border border-slate-900 rounded shadow-md pointer-events-none left-1/2 -translate-x-1/2"
+      />
+    </div>
+  );
+};
+
 export default function RetroBlocksGame() {
   // Game States
   const [board, setBoard] = useState<Board>(createEmptyBoard());
@@ -118,7 +196,21 @@ export default function RetroBlocksGame() {
   const [score, setScore] = useState<number>(0);
   const [lines, setLines] = useState<number>(0);
   const [hasNewHighScore, setHasNewHighScore] = useState<boolean>(false);
-  const [playerName, setPlayerName] = useState<string>('');
+  const [profileName, setProfileName] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const stored = window.localStorage.getItem('retroblocks_profile_name');
+      return stored || 'LOCAL_PLAYER';
+    }
+    return 'LOCAL_PLAYER';
+  });
+  const [playerName, setPlayerName] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      const stored = window.localStorage.getItem('retroblocks_profile_name');
+      return stored || 'LOCAL_PLAYER';
+    }
+    return 'LOCAL_PLAYER';
+  });
+  const [isEditingProfile, setIsEditingProfile] = useState<boolean>(false);
   const [isSaved, setIsSaved] = useState<boolean>(false);
   const [leaderboardKey, setLeaderboardKey] = useState<number>(0);
 
@@ -131,6 +223,17 @@ export default function RetroBlocksGame() {
       }
     }
     return 'REGULAR';
+  });
+
+  const [incrementalMultiplier, setIncrementalMultiplier] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const stored = window.localStorage.getItem('retroblocks_incremental_multiplier');
+      if (stored) {
+        const val = parseInt(stored, 10);
+        if ([1, 2, 3, 4].includes(val)) return val;
+      }
+    }
+    return 1;
   });
   
   const [keybindings, setKeybindings] = useState<Keybindings>(() => {
@@ -201,6 +304,7 @@ export default function RetroBlocksGame() {
   const currentPieceRef = useRef<Tetromino | null>(null);
   const boardRef = useRef<Board>(board);
   const linesRef = useRef<number>(lines);
+  const incrementalMultiplierRef = useRef<number>(incrementalMultiplier);
 
   useEffect(() => {
     currentPieceRef.current = currentPiece;
@@ -213,6 +317,16 @@ export default function RetroBlocksGame() {
   useEffect(() => {
     linesRef.current = lines;
   }, [lines]);
+
+  useEffect(() => {
+    incrementalMultiplierRef.current = incrementalMultiplier;
+  }, [incrementalMultiplier]);
+
+  useEffect(() => {
+    if (statusRef.current === 'PLAYING') {
+      nextStepTimeRef.current = performance.now() + getFallSpeed(speedMode, lines, incrementalMultiplier);
+    }
+  }, [speedMode, incrementalMultiplier, lines]);
 
   const hasNewHighScoreRef = useRef<boolean>(false);
   const isSavedRef = useRef<boolean>(false);
@@ -302,6 +416,45 @@ export default function RetroBlocksGame() {
     }
   }, [status]);
 
+  // Auto-pause when settings open
+  useEffect(() => {
+    if (settingsOpen && status === 'PLAYING') {
+      setStatus('PAUSED');
+      if (musicInGameOnly) {
+        audioEngine.stopMusic();
+      }
+    }
+  }, [settingsOpen, status, musicInGameOnly]);
+
+  // Auto-pause when tab/window is not forefront
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.hidden && statusRef.current === 'PLAYING') {
+        setStatus('PAUSED');
+        if (musicInGameOnly) {
+          audioEngine.stopMusic();
+        }
+      }
+    };
+
+    const handleWindowBlur = () => {
+      if (statusRef.current === 'PLAYING') {
+        setStatus('PAUSED');
+        if (musicInGameOnly) {
+          audioEngine.stopMusic();
+        }
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('blur', handleWindowBlur);
+
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('blur', handleWindowBlur);
+    };
+  }, [musicInGameOnly]);
+
   // Rotates a grid matrix 90deg clockwise
   const rotateMatrix = (matrix: number[][]): number[][] => {
     const n = matrix.length;
@@ -381,11 +534,11 @@ export default function RetroBlocksGame() {
     setLines(0);
     setHasNewHighScore(false);
     setIsSaved(false);
-    setPlayerName('');
+    setPlayerName(profileName);
     setStatus('PLAYING');
     lockTimeRef.current = 0;
     lockResetsRef.current = 0;
-    nextStepTimeRef.current = performance.now() + getFallSpeed(speedMode, 0);
+    nextStepTimeRef.current = performance.now() + getFallSpeed(speedMode, 0, incrementalMultiplier);
     
     // Auto start music if enabled
     if (musicEnabled) {
@@ -419,7 +572,7 @@ export default function RetroBlocksGame() {
     window.localStorage.setItem('retroblocks_speed_mode', nextMode);
     audioEngine.playRotate();
     if (statusRef.current === 'PLAYING') {
-      nextStepTimeRef.current = performance.now() + getFallSpeed(nextMode, lines);
+      nextStepTimeRef.current = performance.now() + getFallSpeed(nextMode, lines, incrementalMultiplier);
     }
   };
 
@@ -676,7 +829,7 @@ export default function RetroBlocksGame() {
         }
         
         // Reset step timer
-        nextStepTimeRef.current = performance.now() + getFallSpeed(speedMode, lines + rowsCleared);
+        nextStepTimeRef.current = performance.now() + getFallSpeed(speedMode, lines + rowsCleared, incrementalMultiplier);
       }, 200);
 
     } else {
@@ -698,9 +851,9 @@ export default function RetroBlocksGame() {
           setNextPieces((prev) => [...prev.slice(1), drawNextPiece()]);
         }
       }
-      nextStepTimeRef.current = performance.now() + getFallSpeed(speedMode, lines);
+      nextStepTimeRef.current = performance.now() + getFallSpeed(speedMode, lines, incrementalMultiplier);
     }
-  }, [nextPieces, score, lines, speedMode, checkCollision, drawNextPiece]);
+  }, [nextPieces, score, lines, speedMode, incrementalMultiplier, checkCollision, drawNextPiece]);
 
   // Soft drop (moves down one square, scores 1 point)
   const moveDown = useCallback(() => {
@@ -750,12 +903,12 @@ export default function RetroBlocksGame() {
       }
     } else if (status === 'PAUSED') {
       setStatus('PLAYING');
-      nextStepTimeRef.current = performance.now() + getFallSpeed(speedMode, lines);
+      nextStepTimeRef.current = performance.now() + getFallSpeed(speedMode, lines, incrementalMultiplier);
       if (musicEnabled) {
         audioEngine.startMusic();
       }
     }
-  }, [status, musicEnabled, speedMode, lines]);
+  }, [status, musicEnabled, speedMode, lines, incrementalMultiplier]);
 
   const clearTouchInterval = useCallback(() => {
     if (swipeHoldIntervalRef.current) {
@@ -923,37 +1076,40 @@ export default function RetroBlocksGame() {
         return key === p.toLowerCase() || key === s.toLowerCase();
       };
 
+      const isInputFocused = document.activeElement?.tagName === 'INPUT';
+      if (isInputFocused) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          handleSaveScore();
+        }
+        return;
+      }
+
+      // Prevent browser scrolling default action for game control and page navigation keys
+      if ([' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'pageup', 'pagedown', 'home', 'end'].includes(e.key.toLowerCase())) {
+        e.preventDefault();
+      }
+
       // If game is paused or menu/game over, standard navigation keys
       if (statusRef.current !== 'PLAYING') {
-        const isInputFocused = document.activeElement?.tagName === 'INPUT';
-        if (isInputFocused) {
-          if (e.key === 'Enter') {
-            e.preventDefault();
-            handleSaveScore();
-          }
-          return;
-        }
-
-        if (e.key === ' ' || e.key === 'Enter') {
+        if (e.key === 'Enter') {
           if (statusRef.current === 'MENU') {
             startGame();
             return;
           } else if (statusRef.current === 'GAME_OVER') {
             if (hasNewHighScoreRef.current && !isSavedRef.current) {
-              e.preventDefault();
               handleSaveScore();
               return;
             } else {
               startGame();
               return;
             }
-          } else if (statusRef.current === 'PAUSED' && e.key === 'Enter') {
+          } else if (statusRef.current === 'PAUSED') {
             togglePause();
             return;
           }
         }
         if (statusRef.current === 'PAUSED' && (isAction('pause') || e.key === 'Escape')) {
-          e.preventDefault();
           togglePause();
           return;
         }
@@ -1059,10 +1215,10 @@ export default function RetroBlocksGame() {
           // 1. Gravity step (only if NOT grounded)
           if (!isGrounded && now >= nextStepTimeRef.current) {
             moveDown();
-            nextStepTimeRef.current = now + getFallSpeed(speedMode, linesRef.current);
+            nextStepTimeRef.current = now + getFallSpeed(speedMode, linesRef.current, incrementalMultiplierRef.current);
           } else if (isGrounded) {
             // Push gravity timer forward so it doesn't queue ticks during lock delay
-            nextStepTimeRef.current = now + getFallSpeed(speedMode, linesRef.current);
+            nextStepTimeRef.current = now + getFallSpeed(speedMode, linesRef.current, incrementalMultiplierRef.current);
           }
         }
 
@@ -1095,7 +1251,7 @@ export default function RetroBlocksGame() {
 
     animationFrameId = requestAnimationFrame(gameLoop);
     return () => cancelAnimationFrame(animationFrameId);
-  }, [moveDown, moveLeft, moveRight, speedMode, mergePieceToBoard, checkCollision]);
+  }, [moveDown, moveLeft, moveRight, speedMode, incrementalMultiplier, mergePieceToBoard, checkCollision]);
 
   // Clean audio music loops on unmount
   useEffect(() => {
@@ -1154,26 +1310,16 @@ export default function RetroBlocksGame() {
               <div className="absolute top-[85%] left-1/2 -translate-x-1/2 pt-4 flex flex-col items-center opacity-0 scale-90 pointer-events-none group-hover:opacity-100 group-hover:scale-100 group-hover:pointer-events-auto transition-all duration-200 z-50 w-20">
                 <div className="bg-slate-950 border-2 border-slate-800 p-3 rounded-lg flex flex-col items-center gap-2 shadow-[0_10px_30px_rgba(0,0,0,0.8)] w-full">
                   <span className="text-[7px] font-bold text-blue-400 tracking-wider">SFX VOL</span>
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.05"
+                  <CustomVerticalSlider
                     value={sfxVolume}
-                    onChange={(e) => {
-                      const vol = parseFloat(e.target.value);
+                    onChange={(vol) => {
                       setSfxVolumeState(vol);
                       audioEngine.setSFXVolume(vol);
                       if (vol > 0 && !soundEnabled) {
                         toggleSound();
                       }
                     }}
-                    style={{
-                      WebkitAppearance: 'slider-vertical' as any,
-                      height: '60px',
-                      width: '16px',
-                    }}
-                    className="accent-blue-500 bg-slate-850 rounded-lg appearance-none cursor-pointer"
+                    colorClass="bg-blue-500"
                   />
                   <span className="text-[9px] font-mono font-bold text-slate-400">{Math.round(sfxVolume * 100)}%</span>
                 </div>
@@ -1198,26 +1344,16 @@ export default function RetroBlocksGame() {
               <div className="absolute top-[85%] left-1/2 -translate-x-1/2 pt-4 flex flex-col items-center opacity-0 scale-90 pointer-events-none group-hover:opacity-100 group-hover:scale-100 group-hover:pointer-events-auto transition-all duration-200 z-50 w-20">
                 <div className="bg-slate-950 border-2 border-slate-800 p-3 rounded-lg flex flex-col items-center gap-2 shadow-[0_10px_30px_rgba(0,0,0,0.8)] w-full">
                   <span className="text-[7px] font-bold text-purple-400 tracking-wider font-sans">BGM VOL</span>
-                  <input
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.05"
+                  <CustomVerticalSlider
                     value={musicVolume}
-                    onChange={(e) => {
-                      const vol = parseFloat(e.target.value);
+                    onChange={(vol) => {
                       setMusicVolumeState(vol);
                       audioEngine.setMusicVolume(vol);
                       if (vol > 0 && !musicEnabled) {
                         toggleMusic();
                       }
                     }}
-                    style={{
-                      WebkitAppearance: 'slider-vertical' as any,
-                      height: '60px',
-                      width: '16px',
-                    }}
-                    className="accent-purple-500 bg-slate-850 rounded-lg appearance-none cursor-pointer"
+                    colorClass="bg-purple-500"
                   />
                   <span className="text-[9px] font-mono font-bold text-slate-400">{Math.round(musicVolume * 100)}%</span>
                 </div>
@@ -1277,7 +1413,7 @@ export default function RetroBlocksGame() {
                 </div>
               ) : (
                 <div className="text-slate-600 text-center uppercase tracking-wider text-[9px] font-bold border border-dashed border-slate-800 p-3 rounded-lg">
-                  EMPTY [X]
+                  EMPTY [{formatKeyName(keybindings.hold[0])}]
                 </div>
               )}
             </div>
@@ -1368,7 +1504,7 @@ export default function RetroBlocksGame() {
                   READY PLAYER ONE
                 </h2>
                 <p className="text-[10px] text-slate-400 max-w-xs mb-6 leading-relaxed font-sans">
-                  A pure, constant-speed retro drop challenge. Slide, rotate, and clear lines.
+                  Slide, rotate, and clear lines.
                 </p>
                 <button
                   onClick={startGame}
@@ -1400,10 +1536,13 @@ export default function RetroBlocksGame() {
                   RESUME GAME
                 </button>
                 <button
-                  onClick={() => setStatus('MENU')}
+                  onClick={() => {
+                    audioEngine.playRotate();
+                    setSettingsOpen(true);
+                  }}
                   className="px-5 py-2 bg-slate-900 hover:bg-slate-850 text-slate-400 border border-slate-800 rounded font-bold text-[9px] tracking-wider uppercase cursor-pointer w-full max-w-[160px]"
                 >
-                  MAIN MENU
+                  SETTINGS
                 </button>
               </div>
             )}
@@ -1581,7 +1720,7 @@ export default function RetroBlocksGame() {
             >
               <span className="text-[10px] text-slate-400 font-bold group-hover:text-blue-400 transition-colors">SPEED MODE</span>
               <span className="text-[10px] font-bold text-blue-400 bg-blue-950/60 border border-blue-900/50 px-2 py-0.5 rounded uppercase flex items-center gap-1">
-                {speedMode === 'INCREMENTAL' ? `INC [${getIncrementalMultiplierString(lines)}]` : speedMode} <Sliders className="w-2.5 h-2.5 ml-1" />
+                {speedMode === 'INCREMENTAL' ? `INC [${getIncrementalMultiplierString(lines, incrementalMultiplier)}]` : speedMode} <Sliders className="w-2.5 h-2.5 ml-1" />
               </span>
             </button>
           </div>
@@ -1665,11 +1804,10 @@ export default function RetroBlocksGame() {
 
             {/* Modal Contents */}
             <div className="p-5 flex-1 overflow-y-auto space-y-6 font-sans">
-              
-              {/* Speed Mode Selector */}
-              <div className="space-y-2">
+                     {/* Speed Mode Selector */}
+              <div className="space-y-3">
                 <span className="text-[10px] text-slate-400 font-retro tracking-widest block uppercase font-bold">Fall Speed Dynamic Mode</span>
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="grid grid-cols-4 gap-1.5 sm:gap-2">
                   {(['REGULAR', 'FAST', 'EXTREME', 'INCREMENTAL'] as SpeedMode[]).map((mode) => (
                     <button
                       key={mode}
@@ -1678,22 +1816,63 @@ export default function RetroBlocksGame() {
                         window.localStorage.setItem('retroblocks_speed_mode', mode);
                         audioEngine.playRotate();
                       }}
-                      className={`py-2 px-1 text-[9px] font-retro font-bold border-2 rounded-lg transition-all cursor-pointer ${
+                      className={`py-2 px-1 text-[8px] sm:text-[9px] font-retro font-bold border-2 rounded-lg transition-all cursor-pointer text-center ${
                         speedMode === mode
                           ? 'bg-blue-950/60 border-blue-500 text-blue-400 shadow-[inset_0_0_10px_rgba(59,130,246,0.3)]'
-                           : 'bg-black border-slate-800 text-slate-500 hover:border-slate-700'
+                          : 'bg-black border-slate-800 text-slate-500 hover:border-slate-700'
                       }`}
                     >
                       {mode}
                     </button>
                   ))}
                 </div>
-                <p className="text-[9px] text-slate-500 font-mono italic">
-                  {speedMode === 'REGULAR' && 'Standard speed. Comfortable but engaging.'}
-                  {speedMode === 'FAST' && 'Turbo speed. Twice as fast as Regular.'}
-                  {speedMode === 'EXTREME' && 'Extreme speed. Twice as fast as Fast.'}
-                  {speedMode === 'INCREMENTAL' && 'Classic challenge. Speed increases every 10 lines cleared.'}
-                </p>
+                
+                {/* Info & Multipliers Row */}
+                <div className="flex items-start justify-between gap-4 pt-1">
+                  {/* Left Side: Description Text */}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[9px] text-slate-500 font-mono italic leading-relaxed">
+                      {speedMode === 'REGULAR' && 'Standard speed. Comfortable but engaging.'}
+                      {speedMode === 'FAST' && 'Turbo speed. Twice as fast as Regular.'}
+                      {speedMode === 'EXTREME' && 'Extreme speed. Twice as fast as Fast.'}
+                      {speedMode === 'INCREMENTAL' && 'Classic challenge. Speed increases every 10 lines cleared, multiplied by selected multiplier.'}
+                    </p>
+                  </div>
+
+                  {/* Right Side: Multipliers (Only active when speedMode === 'INCREMENTAL') */}
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <span className={`text-[8px] font-retro tracking-wider uppercase font-bold transition-colors ${speedMode === 'INCREMENTAL' ? 'text-slate-400' : 'text-slate-600/50'}`}>
+                      Multiplier
+                    </span>
+                    <div className="flex gap-1">
+                      {[1, 2, 3, 4].map((mult) => {
+                        const active = speedMode === 'INCREMENTAL';
+                        const selected = active && incrementalMultiplier === mult;
+                        return (
+                          <button
+                            key={mult}
+                            disabled={!active}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setIncrementalMultiplier(mult);
+                              window.localStorage.setItem('retroblocks_incremental_multiplier', String(mult));
+                              audioEngine.playRotate();
+                            }}
+                            className={`py-1 w-7 sm:w-8 text-[8px] font-retro font-bold border rounded-md transition-all text-center ${
+                              !active
+                                ? 'bg-slate-950/20 border-slate-900/50 text-slate-700/50 cursor-not-allowed'
+                                : selected
+                                ? 'bg-blue-950/60 border-blue-500 text-blue-400 shadow-[inset_0_0_6px_rgba(59,130,246,0.3)] cursor-pointer'
+                                : 'bg-black border-slate-800 text-slate-500 hover:border-slate-700 hover:text-slate-400 cursor-pointer'
+                            }`}
+                          >
+                            x{mult}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
               </div>
 
               {/* Previews Count Configurator */}
@@ -1808,27 +1987,21 @@ export default function RetroBlocksGame() {
                         audioEngine.setMusicStyle(style);
                         audioEngine.playRotate();
                       }}
-                      className={`py-2 px-1 text-[9px] font-retro font-bold border-2 rounded-lg transition-all cursor-pointer flex flex-col items-center justify-center gap-0.5 ${
+                      className={`py-2 px-1 text-[9px] font-retro font-bold border-2 rounded-lg transition-all cursor-pointer flex flex-col items-center justify-center ${
                         musicStyle === style
                           ? 'bg-purple-950/60 border-purple-500 text-purple-400 shadow-[inset_0_0_10px_rgba(168,85,247,0.3)]'
                           : 'bg-black border-slate-800 text-slate-500 hover:border-slate-700'
                       }`}
                     >
                       <span className="text-[10px]">STYLE {style}</span>
-                      <span className="text-[7px] font-mono opacity-80 uppercase">
-                        {style === 'A' && 'Cyber-Pluck'}
-                        {style === 'B' && 'Chill Lofi'}
-                        {style === 'C' && 'Neo Arps'}
-                        {style === 'D' && 'Industrial'}
-                      </span>
                     </button>
                   ))}
                 </div>
                 <p className="text-[9px] text-slate-500 font-mono italic">
-                  {musicStyle === 'A' && 'Cyber-Pluck: Energetic synth plucks and dynamic octave bass leaps.'}
-                  {musicStyle === 'B' && 'Chill Lofi: Gentle lofi rhythms, warm jazz chords, and spacious melodies.'}
-                  {musicStyle === 'C' && 'Neo Arps: Continuous neo-classical synthesizer arpeggios and sustained bass.'}
-                  {musicStyle === 'D' && 'Industrial: Intense natural minor tones, aggressive sawtooth leads, and pumping bass.'}
+                  {musicStyle === 'A' && 'Energetic synth plucks and dynamic octave bass leaps.'}
+                  {musicStyle === 'B' && 'Gentle lofi rhythms, warm jazz chords, and spacious melodies.'}
+                  {musicStyle === 'C' && 'High-energy techno drums, pumping basslines, and soaring supersaw arpeggios.'}
+                  {musicStyle === 'D' && 'Intense natural minor tones, aggressive sawtooth leads, and pumping bass.'}
                 </p>
               </div>
 
@@ -1891,7 +2064,49 @@ export default function RetroBlocksGame() {
 
             {/* Modal Footer */}
             <div className="border-t-2 border-slate-800 p-4 bg-slate-900/40 flex justify-between items-center font-mono text-[9px] text-slate-500">
-              <span>ACTIVE PROFILE: LOCAL_PLAYER</span>
+              <span className="flex items-center gap-1">
+                <span>ACTIVE PROFILE:</span>
+                {isEditingProfile ? (
+                  <input
+                    type="text"
+                    maxLength={10}
+                    value={profileName}
+                    onChange={(e) => {
+                      const val = e.target.value.toUpperCase().slice(0, 10);
+                      setProfileName(val);
+                      window.localStorage.setItem('retroblocks_profile_name', val);
+                    }}
+                    onBlur={() => {
+                      const finalVal = profileName.trim() || 'LOCAL_PLAYER';
+                      setProfileName(finalVal);
+                      window.localStorage.setItem('retroblocks_profile_name', finalVal);
+                      setIsEditingProfile(false);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        const finalVal = profileName.trim() || 'LOCAL_PLAYER';
+                        setProfileName(finalVal);
+                        window.localStorage.setItem('retroblocks_profile_name', finalVal);
+                        setIsEditingProfile(false);
+                        audioEngine.playRotate();
+                      }
+                    }}
+                    autoFocus
+                    className="bg-black border border-slate-700 text-yellow-400 font-mono text-[9px] px-1 py-0.5 rounded focus:outline-none uppercase w-24 inline-block text-center"
+                  />
+                ) : (
+                  <span
+                    onClick={() => {
+                      audioEngine.playRotate();
+                      setIsEditingProfile(true);
+                    }}
+                    className="text-yellow-400 hover:text-yellow-300 border-b border-dashed border-yellow-500/50 cursor-pointer transition-colors uppercase select-none font-bold font-mono"
+                    title="Click to edit profile name"
+                  >
+                    {profileName}
+                  </span>
+                )}
+              </span>
               <button
                 onClick={() => {
                   audioEngine.playRotate();

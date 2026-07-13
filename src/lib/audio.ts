@@ -12,7 +12,9 @@ class RetroAudioEngine {
   private musicStyle: 'A' | 'B' | 'C' | 'D' = 'A';
   
   // Music Scheduler State
-  private schedulerIntervalId: number | null = null;
+  private schedulerIntervalId: any = null;
+  private worker: Worker | null = null;
+  private schedulerActive: boolean = false;
   private nextNoteTime: number = 0;
   private currentStep: number = 0; // 0 to 31 step in our generative loops
   private phraseCount: number = 0; // Number of loops before evolving the music
@@ -28,6 +30,7 @@ class RetroAudioEngine {
   private keepAliveOsc: OscillatorNode | null = null;
   private silentGain: GainNode | null = null;
   private suspendTimeoutId: any = null;
+  private compressor: DynamicsCompressorNode | null = null;
 
   constructor() {
     // Try to load initial settings from localStorage
@@ -52,7 +55,7 @@ class RetroAudioEngine {
     } else if (this.musicStyle === 'B') {
       this.tempoBPM = 100;
     } else if (this.musicStyle === 'C') {
-      this.tempoBPM = 125;
+      this.tempoBPM = 140;
     } else if (this.musicStyle === 'D') {
       this.tempoBPM = 140;
     }
@@ -70,6 +73,16 @@ class RetroAudioEngine {
       if (AudioCtx) {
         this.ctx = new AudioCtx();
         
+        // --- MASTER LIMITER COMPRESSOR ---
+        this.compressor = this.ctx.createDynamicsCompressor();
+        // Start compressing when the signal gets close to clipping threshold
+        this.compressor.threshold.setValueAtTime(-1.5, this.ctx.currentTime);
+        this.compressor.knee.setValueAtTime(4.0, this.ctx.currentTime);
+        this.compressor.ratio.setValueAtTime(12.0, this.ctx.currentTime);
+        this.compressor.attack.setValueAtTime(0.003, this.ctx.currentTime);
+        this.compressor.release.setValueAtTime(0.08, this.ctx.currentTime);
+        this.compressor.connect(this.ctx.destination);
+
         // --- BULLETPROOF SAFARI FIX ---
         // 1. Assign to class properties to prevent Garbage Collection
         this.keepAliveOsc = this.ctx.createOscillator();
@@ -92,14 +105,77 @@ class RetroAudioEngine {
     }
   }
 
+  private connectToDestination(node: AudioNode) {
+    if (!this.ctx) return;
+    if (this.compressor) {
+      node.connect(this.compressor);
+    } else {
+      node.connect(this.ctx.destination);
+    }
+  }
+
+  private initWorker() {
+    if (this.worker) return;
+
+    if (typeof window !== 'undefined' && typeof Worker !== 'undefined') {
+      try {
+        const workerCode = `
+          let timerId = null;
+          let interval = 100;
+
+          self.onmessage = function(e) {
+            if (e.data === "start") {
+              if (timerId) clearInterval(timerId);
+              timerId = setInterval(function() {
+                self.postMessage("tick");
+              }, interval);
+            } else if (e.data === "stop") {
+              if (timerId) {
+                clearInterval(timerId);
+                timerId = null;
+              }
+            } else if (e.data.interval) {
+              interval = e.data.interval;
+              if (timerId) {
+                clearInterval(timerId);
+                timerId = setInterval(function() {
+                  self.postMessage("tick");
+                }, interval);
+              }
+            }
+          };
+        `;
+        const blob = new Blob([workerCode], { type: 'application/javascript' });
+        const workerUrl = URL.createObjectURL(blob);
+        this.worker = new Worker(workerUrl);
+        
+        this.worker.onmessage = (e) => {
+          if (e.data === "tick") {
+            this.handleTick();
+          }
+        };
+      } catch (err) {
+        console.error("Failed to initialize background music worker:", err);
+      }
+    }
+  }
+
+  private handleTick() {
+    if (!this.ctx || !this.schedulerActive) return;
+    const lookahead = 0.2;
+    while (this.nextNoteTime < this.ctx.currentTime + lookahead) {
+      this.scheduleNextNote();
+    }
+  }
+
   private scheduleSuspend() {
     if (this.suspendTimeoutId) {
       clearTimeout(this.suspendTimeoutId);
       this.suspendTimeoutId = null;
     }
-    if (!this.schedulerIntervalId && this.ctx && this.ctx.state === 'running') {
+    if (!this.schedulerActive && this.ctx && this.ctx.state === 'running') {
       this.suspendTimeoutId = setTimeout(() => {
-        if (!this.schedulerIntervalId && this.ctx && this.ctx.state === 'running') {
+        if (!this.schedulerActive && this.ctx && this.ctx.state === 'running') {
           this.ctx.suspend().catch(err => console.error("Failed to suspend AudioContext:", err));
         }
       }, 2000); // Suspend after 2 seconds of silence
@@ -124,7 +200,7 @@ class RetroAudioEngine {
     if (this.sfxEnabled) {
       this.playRotate();
     } else {
-      if (!this.schedulerIntervalId) {
+      if (!this.schedulerActive) {
         this.suspendImmediately();
       }
     }
@@ -189,7 +265,7 @@ class RetroAudioEngine {
     } else if (style === 'B') {
       this.tempoBPM = 100;
     } else if (style === 'C') {
-      this.tempoBPM = 125;
+      this.tempoBPM = 140;
     } else if (style === 'D') {
       this.tempoBPM = 140;
     }
@@ -226,7 +302,7 @@ class RetroAudioEngine {
     gainNode.gain.exponentialRampToValueAtTime(Math.max(finalGainEnd, 0.0001), this.ctx.currentTime + duration);
 
     osc.connect(gainNode);
-    gainNode.connect(this.ctx.destination);
+    this.connectToDestination(gainNode);
 
     osc.start();
     osc.stop(this.ctx.currentTime + duration);
@@ -283,7 +359,7 @@ class RetroAudioEngine {
 
       osc.connect(gainNode);
       gainNode.connect(filter);
-      filter.connect(this.ctx.destination);
+      this.connectToDestination(filter);
 
       osc.start(now + timeOffset);
       osc.stop(now + timeOffset + 0.3);
@@ -319,7 +395,7 @@ class RetroAudioEngine {
 
       osc.connect(gainNode);
       gainNode.connect(filter);
-      filter.connect(this.ctx.destination);
+      this.connectToDestination(filter);
 
       osc.start(now + timeOffset);
       osc.stop(now + timeOffset + 0.5);
@@ -332,6 +408,66 @@ class RetroAudioEngine {
   private midiToFreq(midi: number): number {
     if (midi <= 0) return 0;
     return 440 * Math.pow(2, (midi - 69) / 12);
+  }
+
+  private playKickDrum(now: number) {
+    if (!this.ctx || this.musicVolume <= 0) return;
+    try {
+      const osc = this.ctx.createOscillator();
+      const gainNode = this.ctx.createGain();
+      gainNode.gain.value = 0; // Initialize immediately to prevent default gain of 1.0 leaking
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(150, now);
+      osc.frequency.exponentialRampToValueAtTime(45, now + 0.12);
+
+      gainNode.gain.setValueAtTime(0.0, now);
+      gainNode.gain.linearRampToValueAtTime(0.18 * this.musicVolume, now + 0.005); // Smooth 5ms attack instead of step jump
+      gainNode.gain.linearRampToValueAtTime(0.0, now + 0.14); // Pure linear ramp down to 0 prevents click
+
+      osc.connect(gainNode);
+      this.connectToDestination(gainNode);
+
+      osc.start(now);
+      osc.stop(now + 0.15);
+    } catch (e) {
+      // Ignore audio scheduling exceptions
+    }
+  }
+
+  private playHiHat(now: number) {
+    if (!this.ctx || this.musicVolume <= 0) return;
+    try {
+      const bufferSize = this.ctx.sampleRate * 0.05; // 50ms of noise
+      const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = Math.random() * 2 - 1;
+      }
+
+      const noiseNode = this.ctx.createBufferSource();
+      noiseNode.buffer = buffer;
+
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'highpass';
+      filter.frequency.setValueAtTime(7500, now);
+
+      const gainNode = this.ctx.createGain();
+      gainNode.gain.value = 0; // Initialize immediately to prevent default gain of 1.0 leaking
+
+      gainNode.gain.setValueAtTime(0.0, now);
+      gainNode.gain.linearRampToValueAtTime(0.035 * this.musicVolume, now + 0.003); // Smooth 3ms attack instead of step jump
+      gainNode.gain.linearRampToValueAtTime(0.0, now + 0.045); // Pure linear ramp down to 0 prevents click
+
+      noiseNode.connect(filter);
+      filter.connect(gainNode);
+      this.connectToDestination(gainNode);
+
+      noiseNode.start(now);
+      noiseNode.stop(now + 0.05);
+    } catch (e) {
+      // Ignore audio scheduling exceptions
+    }
   }
 
   private generatePhrase() {
@@ -448,35 +584,94 @@ class RetroAudioEngine {
         }
       }
     } else if (this.musicStyle === 'C') {
-      // Style C: Neo-Classical Arpeggios (continuous running arpeggiated patterns, sustained roots)
-      const chords = [
-        { root: 40, tones: [52, 55, 59, 64, 67, 71] }, // Em
-        { root: 48, tones: [48, 52, 55, 60, 64, 67] }, // C
-        { root: 43, tones: [47, 50, 55, 59, 62, 67] }, // G
-        { root: 45, tones: [45, 48, 52, 57, 60, 64] }  // Am
+      // Style C: Euro Trance / Techno (pumping bass, hypnotic running arpeggios, soaring hooks)
+      // Classic uplifting emotional trance chord progressions:
+      const progressions = [
+        // Progression 1: Em - C - G - D (Uplifting and driving)
+        [
+          { root: 40, tones: [52, 55, 59, 64, 67, 71] }, // Em
+          { root: 48, tones: [48, 52, 55, 60, 64, 67] }, // C
+          { root: 43, tones: [47, 50, 55, 59, 62, 67] }, // G
+          { root: 38, tones: [50, 54, 57, 62, 66, 69] }  // D
+        ],
+        // Progression 2: Am - F - G - Em (Epic, soaring melancholic energy)
+        [
+          { root: 45, tones: [45, 48, 52, 57, 60, 64] }, // Am
+          { root: 41, tones: [41, 45, 48, 53, 57, 60] }, // F
+          { root: 43, tones: [43, 47, 50, 55, 59, 62] }, // G
+          { root: 40, tones: [40, 43, 47, 52, 55, 59] }  // Em
+        ],
+        // Progression 3: Em - D - C - D (The Classic Anjunabeats descent)
+        [
+          { root: 40, tones: [52, 55, 59, 64, 67, 71] }, // Em
+          { root: 38, tones: [50, 54, 57, 62, 66, 69] }, // D
+          { root: 48, tones: [48, 52, 55, 60, 64, 67] }, // C
+          { root: 38, tones: [50, 54, 57, 62, 66, 69] }  // D
+        ],
+        // Progression 4: C - G - Am - F (Emotional and nostalgic trance theme)
+        [
+          { root: 48, tones: [48, 52, 55, 60, 64, 67] }, // C
+          { root: 43, tones: [43, 47, 50, 55, 59, 62] }, // G
+          { root: 45, tones: [45, 48, 52, 57, 60, 64] }, // Am
+          { root: 41, tones: [41, 45, 48, 53, 57, 60] }  // F
+        ]
       ];
-      // Continuous climbing arpeggio pattern index for 8 steps:
-      const arpIndices = [0, 1, 2, 3, 4, 3, 2, 1];
+
+      // Randomly select one of these progressions to ensure a completely non-repetitive loop!
+      const chords = progressions[Math.floor(Math.random() * progressions.length)];
+
+      // Interactive pool of dynamic arpeggio patterns:
+      const arpPatterns = [
+        [0, 2, 1, 3, 2, 4, 3, 5], // High-energy driving
+        [5, 4, 3, 2, 4, 3, 2, 1], // Trance waterfall
+        [0, 1, 2, 3, 4, 5, 4, 3], // Climbing hill
+        [0, 3, 1, 4, 2, 5, 3, 4]  // Interlocking steps
+      ];
+      const arpIndices = arpPatterns[Math.floor(Math.random() * arpPatterns.length)];
+
+      // Scale for beautiful melodic notes:
+      const scale = [64, 67, 69, 71, 74, 76, 79, 81, 83, 86];
 
       for (let step = 0; step < 32; step++) {
         const chordIdx = Math.floor(step / 8) % 4;
         const currentChord = chords[chordIdx];
         const stepInBar = step % 8;
 
-        // Bass: long sustained notes on bar boundaries
-        if (stepInBar === 0) {
+        // Bass: pumping offbeat and rolling bassline
+        if (stepInBar === 0 || stepInBar === 4) {
           this.bassPattern.push(currentChord.root);
+        } else if (stepInBar % 2 !== 0) {
+          this.bassPattern.push(currentChord.root + 12); // Pumping offbeat octave
         } else {
-          this.bassPattern.push(0);
+          // Dynamic rolling bass chance
+          this.bassPattern.push(Math.random() < 0.65 ? currentChord.root : currentChord.root + 12);
         }
 
-        // Harmony: continuous running arpeggio pattern
+        // Harmony: fast, soaring arpeggio pattern
         const noteIdx = arpIndices[stepInBar] % currentChord.tones.length;
         this.harmonyPattern.push(currentChord.tones[noteIdx]);
 
-        // Melody: long notes highlighting chord tones on first steps
+        // Melody: structured phrase with melodic hooks (high-energy soaring trance melody!)
         if (stepInBar === 0) {
-          this.melodyPattern.push(currentChord.tones[currentChord.tones.length - 1] + 12); // High root/octave
+          // Strong landing tone (usually high register chord tones)
+          const highTone = currentChord.tones[Math.floor(Math.random() * 2) + 3] + 12;
+          this.melodyPattern.push(highTone);
+        } else if (stepInBar === 2 || stepInBar === 4 || stepInBar === 6) {
+          // Offbeat syncopations (classic trance hooks)
+          if (Math.random() < 0.75) {
+            const hookTone = currentChord.tones[currentChord.tones.length - 1] + (Math.random() < 0.5 ? 12 : 7);
+            this.melodyPattern.push(hookTone);
+          } else {
+            this.melodyPattern.push(0);
+          }
+        } else if (stepInBar === 3 || stepInBar === 7) {
+          // Quick passing scale tones
+          if (Math.random() < 0.4) {
+            const scaleIdx = Math.floor(Math.random() * scale.length);
+            this.melodyPattern.push(scale[scaleIdx]);
+          } else {
+            this.melodyPattern.push(0);
+          }
         } else {
           this.melodyPattern.push(0);
         }
@@ -545,95 +740,185 @@ class RetroAudioEngine {
 
     const now = this.nextNoteTime;
 
+    // --- Play Drums for Style C (Techno/Trance) ---
+    if (this.musicStyle === 'C' && this.musicVolume > 0) {
+      const stepInBar = this.currentStep % 8;
+      // Kick drum on 0, 4 (Four-on-the-floor beat)
+      if (stepInBar === 0 || stepInBar === 4) {
+        this.playKickDrum(now);
+      }
+      // Offbeat hi-hat on 2, 6
+      if (stepInBar === 2 || stepInBar === 6) {
+        this.playHiHat(now);
+      } else if ((stepInBar === 1 || stepInBar === 3 || stepInBar === 5 || stepInBar === 7) && Math.random() < 0.3) {
+        // Soft random hi-hats for nice groove
+        this.playHiHat(now);
+      }
+    }
+
     // --- Play Bass ---
     if (bassNote > 0 && this.musicVolume > 0) {
       const osc = this.ctx.createOscillator();
       const gainNode = this.ctx.createGain();
+      gainNode.gain.value = 0; // Initialize immediately to prevent default gain of 1.0 leaking
       const filter = this.ctx.createBiquadFilter();
 
       osc.type = 'triangle';
       osc.frequency.setValueAtTime(this.midiToFreq(bassNote), now);
 
       gainNode.gain.setValueAtTime(0.0, now);
-      const bassGain = this.musicStyle === 'D' ? 0.08 : this.musicStyle === 'B' ? 0.04 : 0.06;
-      gainNode.gain.linearRampToValueAtTime(bassGain * this.musicVolume, now + 0.01);
-      gainNode.gain.exponentialRampToValueAtTime(0.001, now + durationInSeconds - 0.01);
+      const bassGain = this.musicStyle === 'D' ? 0.12 : this.musicStyle === 'B' ? 0.07 : this.musicStyle === 'C' ? 0.05 : 0.09;
+      const bassDecay = this.musicStyle === 'C' ? durationInSeconds * 0.8 : durationInSeconds;
+      gainNode.gain.linearRampToValueAtTime(bassGain * this.musicVolume, now + 0.008); // Smooth 8ms attack
+      gainNode.gain.linearRampToValueAtTime(0.0, now + bassDecay); // Smooth linear decay prevents click
 
       filter.type = 'lowpass';
-      const bassCutoff = this.musicStyle === 'B' ? 220 : 350;
+      const bassCutoff = this.musicStyle === 'B' ? 220 : this.musicStyle === 'C' ? 260 : 350;
       filter.frequency.setValueAtTime(bassCutoff, now);
 
       osc.connect(gainNode);
       gainNode.connect(filter);
-      filter.connect(this.ctx.destination);
+      this.connectToDestination(filter);
 
       osc.start(now);
-      osc.stop(now + durationInSeconds);
+      osc.stop(now + bassDecay);
     }
 
     // --- Play Harmony (Chord Companion / Arpeggio) ---
     if (harmonyNote > 0 && this.musicVolume > 0) {
-      const osc = this.ctx.createOscillator();
       const gainNode = this.ctx.createGain();
+      gainNode.gain.value = 0; // Initialize immediately to prevent default gain of 1.0 leaking
       const filter = this.ctx.createBiquadFilter();
 
-      // Style specific oscillator types
-      osc.type = this.musicStyle === 'C' ? 'triangle' : 'sine';
-      osc.frequency.setValueAtTime(this.midiToFreq(harmonyNote), now);
+      const decayMultiplier = this.musicStyle === 'B' ? 2.5 : this.musicStyle === 'C' ? 0.85 : 1.5;
+      const duration = durationInSeconds * decayMultiplier;
 
-      gainNode.gain.setValueAtTime(0.0, now);
-      const harmonyGain = this.musicStyle === 'B' ? 0.03 : this.musicStyle === 'C' ? 0.03 : 0.02;
-      const decayMultiplier = this.musicStyle === 'B' ? 2.5 : this.musicStyle === 'C' ? 1.0 : 1.5;
-      
-      gainNode.gain.linearRampToValueAtTime(harmonyGain * this.musicVolume, now + 0.02);
-      gainNode.gain.exponentialRampToValueAtTime(0.001, now + durationInSeconds * decayMultiplier - 0.02);
+      if (this.musicStyle === 'C') {
+        // Thick detuned 3-oscillator arpeggiator pluck for Euro Trance!
+        const detunes = [-12, 0, 12];
+        const oscillators: OscillatorNode[] = [];
+        detunes.forEach((det) => {
+          const sOsc = this.ctx!.createOscillator();
+          sOsc.type = 'sawtooth';
+          sOsc.frequency.setValueAtTime(this.midiToFreq(harmonyNote), now);
+          sOsc.detune.setValueAtTime(det, now);
+          sOsc.connect(gainNode);
+          oscillators.push(sOsc);
+        });
 
-      filter.type = 'lowpass';
-      const cutoff = this.musicStyle === 'B' ? 500 : 800;
-      filter.frequency.setValueAtTime(cutoff, now);
+        oscillators.forEach(o => o.start(now));
 
-      osc.connect(gainNode);
-      gainNode.connect(filter);
-      filter.connect(this.ctx.destination);
+        gainNode.gain.setValueAtTime(0.0, now);
+        const harmonyGain = 0.011; // Lowered from 0.014 to prevent master clipping
+        gainNode.gain.linearRampToValueAtTime(harmonyGain * this.musicVolume, now + 0.01);
+        gainNode.gain.linearRampToValueAtTime(0.0, now + duration); // Pure linear decay
 
-      osc.start(now);
-      osc.stop(now + durationInSeconds * decayMultiplier);
+        filter.type = 'lowpass';
+        // Pluck filter envelope sweeps downwards for that punchy trance arpeggio sound
+        filter.frequency.setValueAtTime(2200, now);
+        filter.frequency.exponentialRampToValueAtTime(450, now + duration - 0.01);
+        filter.Q.setValueAtTime(2.5, now);
+
+        gainNode.connect(filter);
+        this.connectToDestination(filter);
+
+        oscillators.forEach(o => o.stop(now + duration));
+      } else {
+        const osc = this.ctx.createOscillator();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(this.midiToFreq(harmonyNote), now);
+
+        gainNode.gain.setValueAtTime(0.0, now);
+        const harmonyGain = this.musicStyle === 'B' ? 0.05 : 0.035; // slightly reduced
+        
+        gainNode.gain.linearRampToValueAtTime(harmonyGain * this.musicVolume, now + 0.02);
+        gainNode.gain.linearRampToValueAtTime(0.0, now + duration); // Pure linear decay
+
+        filter.type = 'lowpass';
+        const cutoff = this.musicStyle === 'B' ? 500 : 800;
+        filter.frequency.setValueAtTime(cutoff, now);
+
+        osc.connect(gainNode);
+        gainNode.connect(filter);
+        this.connectToDestination(filter);
+
+        osc.start(now);
+        osc.stop(now + duration);
+      }
     }
 
     // --- Play Melody ---
     if (melodyNote > 0 && this.musicVolume > 0) {
-      const osc = this.ctx.createOscillator();
       const gainNode = this.ctx.createGain();
+      gainNode.gain.value = 0; // Initialize immediately to prevent default gain of 1.0 leaking
       const filter = this.ctx.createBiquadFilter();
 
-      // Style specific oscillator types and values
-      if (this.musicStyle === 'B') {
-        osc.type = 'sine'; // Super warm, soft lofi sound
-      } else if (this.musicStyle === 'D') {
-        osc.type = 'sawtooth'; // Harsh, futuristic industrial sound
+      if (this.musicStyle === 'C') {
+        // Fat, soaring detuned 5-oscillator SUPERSAW Stack!
+        // Detuning values spread across the spectrum for authentic chorus/supersaw texture
+        const detunes = [-22, -10, 0, 10, 22];
+        const oscillators: OscillatorNode[] = [];
+        detunes.forEach((det) => {
+          const sOsc = this.ctx!.createOscillator();
+          sOsc.type = 'sawtooth';
+          sOsc.frequency.setValueAtTime(this.midiToFreq(melodyNote), now);
+          sOsc.detune.setValueAtTime(det, now);
+          sOsc.connect(gainNode);
+          oscillators.push(sOsc);
+        });
+
+        oscillators.forEach(o => o.start(now));
+
+        gainNode.gain.setValueAtTime(0.0, now);
+        const attack = 0.015;
+        const decay = durationInSeconds * 1.5;
+        // Moderate individual volume so the stacked notes blend nicely
+        const melodyGain = 0.018; // Lowered from 0.024 to prevent master clipping
+
+        gainNode.gain.linearRampToValueAtTime(melodyGain * this.musicVolume, now + attack);
+        gainNode.gain.linearRampToValueAtTime(0.0, now + decay); // Pure linear decay
+
+        filter.type = 'lowpass';
+        // Bright open filter with resonating peaks for trance scream!
+        filter.frequency.setValueAtTime(2600, now);
+        filter.frequency.exponentialRampToValueAtTime(900, now + decay - 0.01);
+        filter.Q.setValueAtTime(3.5, now);
+
+        gainNode.connect(filter);
+        this.connectToDestination(filter);
+
+        oscillators.forEach(o => o.stop(now + decay));
       } else {
-        osc.type = 'triangle'; // Retro cyber pluck
+        const osc = this.ctx.createOscillator();
+        // Style specific oscillator types and values
+        if (this.musicStyle === 'B') {
+          osc.type = 'sine'; // Super warm, soft lofi sound
+        } else if (this.musicStyle === 'D') {
+          osc.type = 'sawtooth'; // Harsh, futuristic industrial sound
+        } else {
+          osc.type = 'triangle'; // Retro cyber pluck
+        }
+        osc.frequency.setValueAtTime(this.midiToFreq(melodyNote), now);
+
+        gainNode.gain.setValueAtTime(0.0, now);
+        const attack = this.musicStyle === 'B' ? 0.04 : 0.01;
+        const decay = this.musicStyle === 'B' ? durationInSeconds * 2.0 : durationInSeconds;
+        const melodyGain = this.musicStyle === 'D' ? 0.06 : this.musicStyle === 'B' ? 0.09 : 0.075; // slightly reduced
+        
+        gainNode.gain.linearRampToValueAtTime(melodyGain * this.musicVolume, now + attack);
+        gainNode.gain.linearRampToValueAtTime(0.0, now + decay); // Pure linear decay
+
+        filter.type = 'lowpass';
+        const cutoff = this.musicStyle === 'B' ? 600 : this.musicStyle === 'D' ? 1000 : 1500;
+        filter.frequency.setValueAtTime(cutoff, now);
+
+        osc.connect(gainNode);
+        gainNode.connect(filter);
+        this.connectToDestination(filter);
+
+        osc.start(now);
+        osc.stop(now + decay);
       }
-      osc.frequency.setValueAtTime(this.midiToFreq(melodyNote), now);
-
-      gainNode.gain.setValueAtTime(0.0, now);
-      const attack = this.musicStyle === 'B' ? 0.04 : 0.01;
-      const decay = this.musicStyle === 'B' ? durationInSeconds * 2.0 : this.musicStyle === 'C' ? durationInSeconds * 1.5 : durationInSeconds;
-      const melodyGain = this.musicStyle === 'D' ? 0.03 : this.musicStyle === 'B' ? 0.05 : 0.04;
-      
-      gainNode.gain.linearRampToValueAtTime(melodyGain * this.musicVolume, now + attack);
-      gainNode.gain.exponentialRampToValueAtTime(0.001, now + decay - 0.01);
-
-      filter.type = 'lowpass';
-      const cutoff = this.musicStyle === 'B' ? 600 : this.musicStyle === 'D' ? 1000 : 1500;
-      filter.frequency.setValueAtTime(cutoff, now);
-
-      osc.connect(gainNode);
-      gainNode.connect(filter);
-      filter.connect(this.ctx.destination);
-
-      osc.start(now);
-      osc.stop(now + decay);
     }
 
     // Advance scheduling step and time
@@ -652,7 +937,7 @@ class RetroAudioEngine {
   }
 
   private startScheduler() {
-    if (this.schedulerIntervalId) return;
+    if (this.schedulerActive) return;
 
     this.initCtx();
     if (!this.ctx) return;
@@ -664,14 +949,19 @@ class RetroAudioEngine {
     this.nextNoteTime = this.ctx.currentTime + 0.05;
     this.currentStep = 0;
 
-    // Lookahead loop: runs every 100ms and schedules notes that fall within next 200ms
-    const lookahead = 0.2;
-    this.schedulerIntervalId = window.setInterval(() => {
-      if (!this.ctx) return;
-      while (this.nextNoteTime < this.ctx.currentTime + lookahead) {
-        this.scheduleNextNote();
-      }
-    }, 100);
+    this.schedulerActive = true;
+
+    // Try to start the Web Worker scheduler
+    this.initWorker();
+    if (this.worker) {
+      this.worker.postMessage("start");
+    } else {
+      // Fallback lookahead loop: runs every 100ms and schedules notes that fall within next 200ms
+      const lookahead = 0.2;
+      this.schedulerIntervalId = window.setInterval(() => {
+        this.handleTick();
+      }, 100);
+    }
   }
 
   public startMusic() {
@@ -684,9 +974,13 @@ class RetroAudioEngine {
   }
 
   public stopMusic() {
+    this.schedulerActive = false;
     if (this.schedulerIntervalId) {
       clearInterval(this.schedulerIntervalId);
       this.schedulerIntervalId = null;
+    }
+    if (this.worker) {
+      this.worker.postMessage("stop");
     }
     this.scheduleSuspend();
   }
